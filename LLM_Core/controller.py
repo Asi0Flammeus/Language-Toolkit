@@ -1,9 +1,9 @@
 import os
-from view import ViewCLI
+from LLM_Core.view import CoreViewCLI
 
 class CoreController():
     def __init__(self):
-        self.view = ViewCLI()
+        self.view = CoreViewCLI()
 
         self.folder_path = self.view.get_folder_path()
         self.input_subfolder_name = os.path.basename(self.folder_path)
