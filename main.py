@@ -7,7 +7,7 @@ import subprocess
 import logging
 from pathlib import Path
 import threading
-import queue  # Import the queue module
+import queue
 
 # --- Constants ---
 SUPPORTED_LANGUAGES_FILE = "supported_languages.json"
@@ -36,10 +36,10 @@ class ConfigManager:
             with open(file_path, "r") as f:
                 return json.load(f)
         except FileNotFoundError:
-            logging.warning(f"Config file not found: {file_path}.  Creating a default.")
-            return {}  # Return an empty dictionary if the file doesn't exist
+            logging.warning(f"Config file not found: {file_path}. Creating a default.")
+            return {}
         except json.JSONDecodeError:
-            logging.error(f"Error decoding JSON from {file_path}.  Please check the file for errors.")
+            logging.error(f"Error decoding JSON from {file_path}. Please check the file for errors.")
             return {}
 
     def save_json(self, data, file_path: Path):
@@ -60,21 +60,38 @@ class ConfigManager:
         return self.api_keys
 
     def save_languages(self):
-         self.save_json(self.languages, self.languages_file)
+        self.save_json(self.languages, self.languages_file)
     
     def save_elevenlabs_config(self):
         self.save_json(self.elevenlabs_config, self.elevenlabs_file)
 
     def save_api_keys(self):
         """Saves the current API keys to the configuration file."""
-        self.save_json(self.api_keys, self.api_keys_file)
-
-
+        try:
+            self.save_json(self.api_keys, self.api_keys_file)
+            logging.info("API keys saved successfully")
+        except Exception as e:
+            logging.error(f"Error saving API keys: {e}")
 
 class ToolBase:
+    """Base class for all tools in the application."""
+    
+    def __init__(self, master, config_manager, progress_queue):
+        """Initialize the tool base class."""
+        self.master = master
+        self.config_manager = config_manager
+        self.progress_queue = progress_queue
+        self.input_paths = []
+        self.output_path = None
+        self.supported_languages = self.config_manager.get_languages()
+        
+        # Initialize display attributes
+        self.input_paths_display = None
+        self.output_path_display = None
+
     def select_input_paths(self):
         """Opens a dialog to select one or more input files or directories."""
-        paths = filedialog.askdirectory(title="Select Input Directory") if self.__class__.__name__ == "PPTXTranslationTool" \
+        paths = filedialog.askdirectory(title="Select Input Directory") if isinstance(self, PPTXTranslationTool) \
                else filedialog.askopenfilenames(title="Select Input Files")
         
         if paths:
@@ -86,6 +103,27 @@ class ToolBase:
             self.update_input_display()
             return True
         return False
+
+    def select_output_path(self):
+        """Opens a dialog to select an output directory."""
+        path = filedialog.askdirectory(title="Select Output Directory")
+        if path:
+            self.output_path = Path(path)
+            logging.info(f"Output path selected: {self.output_path}")
+            self.update_output_display()
+            return True
+        return False
+
+    def set_same_as_input(self):
+        """Sets the output path to be the same as the input path."""
+        if self.input_paths:
+            self.output_path = self.input_paths[0].parent
+            logging.info(f"Output path set to same as input: {self.output_path}")
+            self.update_output_display()
+            return True
+        else:
+            messagebox.showwarning("Warning", "Please select input paths first.")
+            return False
 
     def update_input_display(self):
         """Updates the input paths display."""
@@ -121,7 +159,6 @@ class ToolBase:
                 messagebox.showinfo("Info", "Processing cancelled.")
                 return
 
-        # Start the processing in a separate thread
         threading.Thread(target=self._process_paths_threaded, daemon=True).start()
 
     def _process_paths_threaded(self):
@@ -191,221 +228,114 @@ class ToolBase:
             self.send_progress_update(f"Error processing {file_path.name}: {e}")
             logging.exception(f"Error processing {file_path}")
 
-class PPTXToPNGTool(ToolBase):
-    """Converts PPTX files to PNG images (slides by slides) using LibreOffice and ImageMagick."""
+    def send_progress_update(self, message: str):
+        """Sends a progress update message to the GUI."""
+        self.progress_queue.put(message)
 
-    def __init__(self, master, config_manager, progress_queue):
-        super().__init__(master, config_manager, progress_queue)
-        self.adobe_api_key = config_manager.get_api_keys().get("adobe", None)  # Example
-
-    def process_file(self, input_file: Path, output_dir: Path = None):
-        """Converts a single PPTX file to PNG images."""
-        if input_file.suffix.lower() != ".pptx":
-            self.send_progress_update(f"Skipping non-PPTX file: {input_file}")
-            return
-
-        try:
-            self.send_progress_update(f"Converting {input_file.name} to PNG...")
-            # Build the command
-            command = [
-                "libreoffice",
-                "--headless",
-                "--convert-to",
-                "pdf",
-                "--outdir",
-                str(output_dir),
-                str(input_file)
-            ]
-
-            # Execute the command
-            result = subprocess.run(command, capture_output=True, text=True, check=True)
-
-            # Extract PDF file path from output directory and input file name
-            pdf_file = output_dir / input_file.with_suffix(".pdf").name
-
-            # Convert PDF to a series of PNGs with ImageMagick
-            convert_command = [
-                "magick",
-                "convert",
-                "-density",
-                "300",  # You can adjust the DPI here
-                str(pdf_file),
-                str(output_dir / f"{input_file.stem}-%03d.png")  # output to png files in the out_dir
-            ]
-
-            # Execute the conversion command
-            result = subprocess.run(convert_command, capture_output=True, text=True, check=True)
-            self.send_progress_update(f"Successfully converted {input_file.name} to PNG images in {output_dir}")
-
-        except subprocess.CalledProcessError as e:
-            error_message = f"Error converting {input_file.name}: {e.stderr}"
-            self.send_progress_update(error_message)
-            logging.error(error_message)
-        except Exception as e:
-            error_message = f"Unexpected error processing {input_file.name}: {e}"
-            self.send_progress_update(error_message)
-            logging.exception(error_message)
-class TextTranslationTool(ToolBase):
-    """Translates text files from one language to another."""
-
-    def __init__(self, master, config_manager, progress_queue):
-        super().__init__(master, config_manager, progress_queue)
-        self.source_lang = tk.StringVar(value="en")  # Default source language
-        self.target_lang = tk.StringVar(value="fr")  # Default target language
-        self.api_key = config_manager.get_api_keys().get("deepl", None) # Example
-
-    def process_file(self, input_file: Path, output_dir: Path = None):
-        """Translates a single text file."""
-        if input_file.suffix.lower() != ".txt":
-            self.send_progress_update(f"Skipping non-TXT file: {input_file}")
-            return
-
-        try:
-            self.send_progress_update(f"Translating {input_file.name}...")
-            with open(input_file, "r", encoding="utf-8") as f:
-                text = f.read()
-
-            # Translation logic (replace with your actual translation API call)
-            translated_text = self.translate_text(text, self.source_lang.get(), self.target_lang.get())
-
-            output_file = output_dir / f"{input_file.stem}_translated.txt"
-            with open(output_file, "w", encoding="utf-8") as f:
-                f.write(translated_text)
-
-            self.send_progress_update(f"Successfully translated {input_file.name} to {output_file.name}")
-
-        except Exception as e:
-            error_message = f"Error translating {input_file.name}: {e}"
-            self.send_progress_update(error_message)
-            logging.exception(error_message)
-
-    def translate_text(self, text: str, source_lang: str, target_lang: str) -> str:
-         """
-         Placeholder for translation API call.  Replace with your actual
-         translation logic (e.g., using DeepL, Google Translate, etc.).
-         """
-         #Mock translation
-         return f"Translated text from {source_lang} to {target_lang}: {text}"
-class AudioTranscriptionTool(ToolBase):
-    """Transcribes audio files to text files."""
-
-    def __init__(self, master, config_manager, progress_queue):
-        super().__init__(master, config_manager, progress_queue)
-        self.api_key = config_manager.get_api_keys().get("openai", None) # Example
-
-    def process_file(self, input_file: Path, output_dir: Path = None):
-        """Transcribes a single audio file."""
-        if input_file.suffix.lower() not in [".mp3", ".wav", ".m4a"]:
-            self.send_progress_update(f"Skipping unsupported audio file: {input_file}")
-            return
-
-        try:
-            self.send_progress_update(f"Transcribing {input_file.name}...")
-
-            # Transcription logic (replace with your actual transcription API call)
-            transcript = self.transcribe_audio(input_file)
-
-            output_file = output_dir / f"{input_file.stem}_transcript.txt"
-            with open(output_file, "w", encoding="utf-8") as f:
-                f.write(transcript)
-
-            self.send_progress_update(f"Successfully transcribed {input_file.name} to {output_file.name}")
-
-        except Exception as e:
-            error_message = f"Error transcribing {input_file.name}: {e}"
-            self.send_progress_update(error_message)
-            logging.exception(error_message)
-
-    def transcribe_audio(self, audio_file: Path) -> str:
-        """
-        Placeholder for audio transcription API call.  Replace with your actual
-        transcription logic (e.g., using OpenAI Whisper API).
-        """
-        #Mock transcription
-        return f"Transcript of {audio_file.name}"
-class AudioGenerationTool(ToolBase):
-    """Generates audio from text files using ElevenLabs."""
-
-    def __init__(self, master, config_manager, progress_queue):
-        super().__init__(master, config_manager, progress_queue)
-        self.voice_id = tk.StringVar()  # Voice ID for ElevenLabs
-        self.elevenlabs_config = config_manager.get_elevenlabs_config() # Load elevenlabs config
-        self.api_key = config_manager.get_api_keys().get("elevenlabs", None) # Example
-
-    def process_file(self, input_file: Path, output_dir: Path = None):
-        """Generates audio from a single text file."""
-        if input_file.suffix.lower() != ".txt":
-            self.send_progress_update(f"Skipping non-TXT file: {input_file}")
-            return
-
-        try:
-            self.send_progress_update(f"Generating audio from {input_file.name}...")
-            with open(input_file, "r", encoding="utf-8") as f:
-                text = f.read()
-
-            # Audio generation logic (replace with your actual ElevenLabs API call)
-            audio_file = self.generate_audio(text, self.voice_id.get())
-
-            output_file = output_dir / f"{input_file.stem}.mp3"
-            # Save the audio file
-            self.send_progress_update(f"Successfully generated audio from {input_file.name} to {output_file.name}")
-
-        except Exception as e:
-            error_message = f"Error generating audio from {input_file.name}: {e}"
-            self.send_progress_update(error_message)
-            logging.exception(error_message)
-
-    def generate_audio(self, text: str, voice_id: str) -> Path:
-        """
-        Placeholder for audio generation API call.  Replace with your actual
-        ElevenLabs API logic.
-        """
-        #Mock audio generation
-        return Path("dummy_audio.mp3")
-class VideoGenerationTool(ToolBase):
-    """Generates a video from a folder of PNG images and MP3 audio files."""
-
-    def __init__(self, master, config_manager, progress_queue):
-        super().__init__(master, config_manager, progress_queue)
-
-    def process_directory(self, input_dir: Path, output_dir: Path = None):
-        """Generates a video from a folder containing PNG images and MP3 audio files."""
-
-        try:
-            self.send_progress_update(f"Generating video from {input_dir.name}...")
-
-            # Video generation logic
-            output_file = self.generate_video(input_dir, output_dir)
-
-            self.send_progress_update(f"Successfully generated video to {output_file.name}")
-
-        except Exception as e:
-            error_message = f"Error generating video from {input_dir.name}: {e}"
-            self.send_progress_update(error_message)
-            logging.exception(error_message)
-
-    def process_file(self, input_file: Path, output_dir: Path = None):
-        """
-        Dummy implementation to satisfy abstract method requirement.  Video generation
-        tool operates on directories, not individual files.
-        """
+    def before_processing(self):
+        """Hook for pre-processing setup."""
         pass
 
-    def generate_video(self, input_dir: Path, output_dir: Path = None) -> Path:
-        """
-        Placeholder for video generation logic.  Replace with your actual
-        video generation logic (e.g., using MoviePy).
-        """
-        #Mock video generation
-        return Path("dummy_video.mp4")
+    def after_processing(self):
+        """Hook for post-processing cleanup."""
+        pass
+
+    def process_file(self, input_file: Path, output_dir: Path = None):
+        """Abstract method for processing a single file."""
+        raise NotImplementedError("Subclasses must implement process_file()")
+
+
 class PPTXTranslationTool(ToolBase):
     """Translates PPTX files from one language to another."""
 
     def __init__(self, master, config_manager, progress_queue):
         super().__init__(master, config_manager, progress_queue)
-        self.source_lang = tk.StringVar(value="en")  # Default source language
-        self.target_lang = tk.StringVar(value="fr")  # Default target language
-        self.api_key = config_manager.get_api_keys().get("deepl", None) # Example
+        
+        # Language selection variables
+        self.source_lang = tk.StringVar(value="en")
+        self.target_lang = tk.StringVar(value="fr")
+        
+        # Create language selection frame
+        self.create_language_selection()
+        
+        self.api_key = self.config_manager.get_api_keys().get("deepl")
+        if not self.api_key:
+            logging.warning("DeepL API key not configured")
+
+    def create_language_selection(self):
+        """Creates the language selection UI elements."""
+        # Language selection frame
+        self.lang_frame = ttk.LabelFrame(self.master, text="Language Selection")
+        self.lang_frame.pack(fill='x', padx=5, pady=5)
+
+        # Source language
+        source_frame = ttk.Frame(self.lang_frame)
+        source_frame.pack(side=tk.LEFT, padx=5, pady=5)
+        
+        ttk.Label(source_frame, text="Source Language:").pack(side=tk.LEFT, padx=5)
+        self.source_lang_combo = ttk.Combobox(
+            source_frame, 
+            textvariable=self.source_lang,
+            values=list(self.supported_languages.get("source_languages", {}).keys()),
+            state="readonly",
+            width=10
+        )
+        self.source_lang_combo.pack(side=tk.LEFT, padx=5)
+
+        # Target language
+        target_frame = ttk.Frame(self.lang_frame)
+        target_frame.pack(side=tk.LEFT, padx=5, pady=5)
+        
+        ttk.Label(target_frame, text="Target Language:").pack(side=tk.LEFT, padx=5)
+        self.target_lang_combo = ttk.Combobox(
+            target_frame, 
+            textvariable=self.target_lang,
+            values=list(self.supported_languages.get("target_languages", {}).keys()),
+            state="readonly",
+            width=10
+        )
+        self.target_lang_combo.pack(side=tk.LEFT, padx=5)
+
+        # Add language info tooltips
+        self.add_language_tooltips()
+
+    def add_language_tooltips(self):
+        """Adds tooltips to show full language names on hover."""
+        def create_tooltip(widget, text):
+            def show_tooltip(event):
+                tooltip = tk.Toplevel()
+                tooltip.wm_overrideredirect(True)
+                tooltip.wm_geometry(f"+{event.x_root+10}+{event.y_root+10}")
+                
+                label = ttk.Label(tooltip, text=text, background="#ffffe0", relief='solid', borderwidth=1)
+                label.pack()
+                
+                def hide_tooltip():
+                    tooltip.destroy()
+                
+                widget.tooltip = tooltip
+                widget.after(2000, hide_tooltip)
+            
+            def hide_tooltip(event):
+                if hasattr(widget, 'tooltip'):
+                    widget.tooltip.destroy()
+            
+            widget.bind('<Enter>', show_tooltip)
+            widget.bind('<Leave>', hide_tooltip)
+
+        # Add tooltips for source languages
+        source_languages = self.supported_languages.get("source_languages", {})
+        source_tooltip_text = "Available source languages:\n" + \
+                            "\n".join(f"{code}: {name}" for code, name in source_languages.items())
+        create_tooltip(self.source_lang_combo, source_tooltip_text)
+
+        # Add tooltips for target languages
+        target_languages = self.supported_languages.get("target_languages", {})
+        target_tooltip_text = "Available target languages:\n" + \
+                            "\n".join(f"{code}: {name}" for code, name in target_languages.items())
+        create_tooltip(self.target_lang_combo, target_tooltip_text)
+
+
 
     def process_file(self, input_file: Path, output_dir: Path = None):
         """Processes a single PPTX file."""
@@ -424,24 +354,32 @@ class PPTXTranslationTool(ToolBase):
             self.send_progress_update(error_message)
             logging.exception(error_message)
 
-
-
     def translate_pptx(self, input_file: Path, source_lang: str, target_lang: str, output_dir: Path) -> Path:
-        """
-        Translates a PPTX file using DeepL API.
-        """
+        """Translates a PPTX file using DeepL API."""
         try:
             import pptx
             from pptx import Presentation
             import deepl
 
-            # Initialize DeepL translator
-            api_key = self.api_key
+            # Get and validate API key
+            api_key = self.config_manager.get_api_keys().get("deepl")
             if not api_key:
-                raise ValueError("DeepL API key not configured")
+                raise ValueError("DeepL API key not configured. Please add your API key in the Configuration menu.")
             
-            translator = deepl.Translator(api_key)
+            # Validate API key format
+            if not isinstance(api_key, str) or len(api_key.strip()) < 10:
+                raise ValueError("Invalid DeepL API key format. Please check your API key.")
+
+            translator = deepl.Translator(api_key.strip())
             
+            # Test API connection
+            try:
+                translator.get_usage()
+            except deepl.exceptions.AuthorizationException:
+                raise ValueError("Invalid DeepL API key. Please check your API key.")
+            except Exception as e:
+                raise ValueError(f"Error connecting to DeepL API: {str(e)}")
+
             # Load the presentation
             prs = Presentation(input_file)
             
@@ -449,11 +387,36 @@ class PPTXTranslationTool(ToolBase):
             total_shapes = sum(len(slide.shapes) for slide in prs.slides)
             processed_shapes = 0
             
-            # Iterate through all slides and shapes
+            # Translate each shape with text
             for slide in prs.slides:
                 for shape in slide.shapes:
                     if hasattr(shape, "text") and shape.text.strip():
                         try:
+                            # Store original formatting
+                            original_paras = []
+                            for para in shape.text_frame.paragraphs:
+                                para_format = {
+                                    'alignment': para.alignment,
+                                    'level': para.level,
+                                    'line_spacing': para.line_spacing,
+                                    'space_before': para.space_before,
+                                    'space_after': para.space_after,
+                                    'runs': []
+                                }
+                                
+                                for run in para.runs:
+                                    run_format = {
+                                        'font_name': run.font.name,
+                                        'size': run.font.size,
+                                        'bold': run.font.bold,
+                                        'italic': run.font.italic,
+                                        'underline': run.font.underline,
+                                        'color': run.font.color.rgb if run.font.color else None,
+                                        'language': run.font.language_id if hasattr(run.font, 'language_id') else None
+                                    }
+                                    para_format['runs'].append(run_format)
+                                original_paras.append(para_format)
+
                             # Translate the text
                             translated_text = translator.translate_text(
                                 shape.text,
@@ -461,81 +424,124 @@ class PPTXTranslationTool(ToolBase):
                                 target_lang=target_lang
                             )
                             
-                            # Update the shape with translated text
+                            # Clear existing text
                             text_frame = shape.text_frame
                             text_frame.clear()
-                            p = text_frame.paragraphs[0]
-                            p.text = translated_text.text
                             
-                            # Maintain original formatting
-                            for run in p.runs:
-                                run.font.name = shape.text_frame.paragraphs[0].runs[0].font.name
-                                run.font.size = shape.text_frame.paragraphs[0].runs[0].font.size
+                            # Split translated text into paragraphs
+                            translated_paragraphs = translated_text.text.split('\n')
+                            
+                            # Restore formatting
+                            for i, (trans_text, orig_format) in enumerate(zip(translated_paragraphs, original_paras)):
+                                if i == 0:
+                                    p = text_frame.paragraphs[0]
+                                else:
+                                    p = text_frame.add_paragraph()
                                 
+                                # Restore paragraph formatting
+                                p.alignment = orig_format['alignment']
+                                p.level = orig_format['level']
+                                if orig_format['line_spacing']:
+                                    p.line_spacing = orig_format['line_spacing']
+                                if orig_format['space_before']:
+                                    p.space_before = orig_format['space_before']
+                                if orig_format['space_after']:
+                                    p.space_after = orig_format['space_after']
+
+                                # Add text and restore run formatting
+                                if orig_format['runs']:
+                                    # Split translated text proportionally among runs
+                                    words = trans_text.split()
+                                    runs_count = len(orig_format['runs'])
+                                    words_per_run = len(words) // runs_count
+                                    extra_words = len(words) % runs_count
+
+                                    start_idx = 0
+                                    for j, run_format in enumerate(orig_format['runs']):
+                                        # Calculate words for this run
+                                        word_count = words_per_run + (1 if j < extra_words else 0)
+                                        end_idx = start_idx + word_count
+                                        run_text = ' '.join(words[start_idx:end_idx])
+                                        start_idx = end_idx
+
+                                        # Add run with original formatting
+                                        run = p.add_run()
+                                        run.text = run_text + (' ' if j < runs_count - 1 else '')
+                                        
+                                        # Restore run formatting
+                                        font = run.font
+                                        if run_format['font_name']:
+                                            font.name = run_format['font_name']
+                                        if run_format['size']:
+                                            font.size = run_format['size']
+                                        if run_format['bold']:
+                                            font.bold = run_format['bold']
+                                        if run_format['italic']:
+                                            font.italic = run_format['italic']
+                                        if run_format['underline']:
+                                            font.underline = run_format['underline']
+                                        if run_format['color']:
+                                            font.color.rgb = run_format['color']
+                                        if run_format['language']:
+                                            font.language_id = run_format['language']
+                                else:
+                                    # If no runs in original, add text as single run
+                                    p.text = trans_text
+                                    
                         except Exception as e:
                             self.send_progress_update(f"Error translating shape: {e}")
                     
                     processed_shapes += 1
-                    if processed_shapes % 10 == 0:  # Update progress every 10 shapes
+                    if processed_shapes % 10 == 0:
                         progress = (processed_shapes / total_shapes) * 100
                         self.send_progress_update(f"Translation progress: {progress:.1f}%")
-            
+
             # Create output filename
             output_file = output_dir / f"{input_file.stem}_{target_lang}{input_file.suffix}"
             
             # Save the translated presentation
             prs.save(output_file)
-            
-            self.send_progress_update(f"Translation completed: {output_file}")
             return output_file
             
         except ImportError:
-            self.send_progress_update("Required libraries not installed. Please install python-pptx and deepl")
-            raise
+            raise ImportError("Required libraries not installed. Please install python-pptx and deepl")
         except Exception as e:
-            self.send_progress_update(f"Translation failed: {str(e)}")
-            raise
+            raise Exception(f"Translation failed: {str(e)}")
 
-
-class MainApp(TkinterDnD.Tk):  # Inherit from TkinterDnD.Tk
+class MainApp(TkinterDnD.Tk):
     """Main application class."""
 
     def __init__(self):
-        super().__init__()  # Initialize TkinterDnD.Tk
+        super().__init__()
 
         self.title("Course Video Tools")
         self.geometry("800x600")
 
-        # --- Initialize Components ---
+        # Initialize components
         self.config_manager = ConfigManager()
-        self.progress_queue = queue.Queue()  # Queue for progress updates
+        self.progress_queue = queue.Queue()
 
-        # --- UI Elements ---
+        # Create UI
         self.create_widgets()
-        self.process_progress_queue()  # Start checking for progress updates
+        self.process_progress_queue()
 
     def create_widgets(self):
         """Creates the main UI elements."""
-        # --- Menu ---
+        # Menu
         self.menu_bar = tk.Menu(self)
         self.config_menu = tk.Menu(self.menu_bar, tearoff=0)
         self.config_menu.add_command(label="API Keys", command=self.open_api_key_config)
         self.menu_bar.add_cascade(label="Configuration", menu=self.config_menu)
         self.config(menu=self.menu_bar)
 
-        # --- Notebook (Tab Control) ---
+        # Notebook (Tab Control)
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(expand=True, fill="both", padx=10, pady=10)
 
-        # --- Tool Frames ---
+        # Tool Frames
         self.pptx_translation_tool = self.create_tool_tab("PPTX Translation", PPTXTranslationTool)
-        self.pptx_to_png_tool = self.create_tool_tab("PPTX to PNG", PPTXToPNGTool)
-        self.text_translation_tool = self.create_tool_tab("Text Translation", TextTranslationTool)
-        self.audio_transcription_tool = self.create_tool_tab("Audio Transcription", AudioTranscriptionTool)
-        self.audio_generation_tool = self.create_tool_tab("Audio Generation", AudioGenerationTool)
-        self.video_generation_tool =  self.create_tool_tab("Video Generation", VideoGenerationTool)
 
-        # --- Progress Text Area ---
+        # Progress Text Area
         self.progress_label = tk.Label(self, text="Progress:")
         self.progress_label.pack(pady=(0, 5))
 
@@ -550,13 +556,25 @@ class MainApp(TkinterDnD.Tk):  # Inherit from TkinterDnD.Tk
         """Creates a tab with the specified tool."""
         frame = ttk.Frame(self.notebook)
         self.notebook.add(frame, text=tab_name)
-        tool = tool_class(frame, self.config_manager, self.progress_queue)
-        self.create_tool_ui(frame, tool)  # Moved UI creation here to be more modular
+        
+        tool = tool_class(
+            master=frame,
+            config_manager=self.config_manager,
+            progress_queue=self.progress_queue
+        )
+        
+        self.create_tool_ui(frame, tool)
         return tool
+
 
     def create_tool_ui(self, frame, tool):
         """Creates the UI elements for a specific tool."""
-        # --- Input Path Selection ---
+        
+        # If the tool is PPTXTranslationTool, let it create its language selection UI
+        if isinstance(tool, PPTXTranslationTool):
+            tool.create_language_selection()
+    
+        # Input Path Selection
         input_frame = ttk.Frame(frame)
         input_frame.pack(pady=5, fill='x', padx=5)
 
@@ -566,53 +584,54 @@ class MainApp(TkinterDnD.Tk):  # Inherit from TkinterDnD.Tk
         input_button = ttk.Button(input_frame, text="Select Input", command=tool.select_input_paths)
         input_button.pack(side=tk.LEFT, padx=5)
 
-        # Add text display for input paths
         tool.input_paths_display = tk.Text(input_frame, height=3, width=50, wrap=tk.WORD)
         tool.input_paths_display.pack(side=tk.LEFT, padx=5, fill='x', expand=True)
         
-        # Add scrollbar for input paths
-        input_scrollbar = ttk.Scrollbar(input_frame, orient="vertical", command=tool.input_paths_display.yview)
+        input_scrollbar = ttk.Scrollbar(input_frame, orient="vertical", 
+                                      command=tool.input_paths_display.yview)
         input_scrollbar.pack(side=tk.RIGHT, fill='y')
         tool.input_paths_display.configure(yscrollcommand=input_scrollbar.set)
-        tool.input_paths_display.configure(state='disabled')  # Make read-only
+        tool.input_paths_display.configure(state='disabled')
         
-        # --- Output Path Selection ---
+        # Output Path Selection
         output_frame = ttk.Frame(frame)
         output_frame.pack(pady=5, fill='x', padx=5)
 
         output_label = ttk.Label(output_frame, text="Output Path:")
         output_label.pack(side=tk.LEFT, padx=5)
 
-        output_button = ttk.Button(output_frame, text="Select Output", command=tool.select_output_path)
+        output_button = ttk.Button(output_frame, text="Select Output", 
+                                 command=tool.select_output_path)
         output_button.pack(side=tk.LEFT, padx=5)
 
-        same_as_input_button = ttk.Button(output_frame, text="Same as Input", command=tool.set_same_as_input)
+        same_as_input_button = ttk.Button(output_frame, text="Same as Input", 
+                                        command=tool.set_same_as_input)
         same_as_input_button.pack(side=tk.LEFT, padx=5)
 
-        # Add text display for output path
         tool.output_path_display = tk.Text(output_frame, height=1, width=50)
         tool.output_path_display.pack(side=tk.LEFT, padx=5, fill='x', expand=True)
-        tool.output_path_display.configure(state='disabled')  # Make read-only
+        tool.output_path_display.configure(state='disabled')
 
-        # --- Process Button ---
+        # Process Button
         process_button = ttk.Button(frame, text="Process", command=tool.process_paths)
         process_button.pack(pady=10)
 
-        # --- Drag and Drop ---
+        # Drag and Drop
         input_frame.drop_target_register(DND_FILES)
         input_frame.dnd_bind('<<Drop>>', lambda e: self.on_drop(e, tool))
 
     def on_drop(self, event, tool):
         """Handles drag and drop events."""
-        # This is a tuple of file paths.
         files = event.data.split()
         tool.input_paths = [Path(f) for f in files]
         logging.info(f"Files dropped: {tool.input_paths}")
-        tool.update_input_display()  # Update GUI display
+        tool.update_input_display()
+
     def open_api_key_config(self):
         """Opens a dialog to configure API keys."""
         api_config_window = tk.Toplevel(self)
         api_config_window.title("API Key Configuration")
+        api_config_window.geometry("500x300")
 
         # Load current API keys
         api_keys = self.config_manager.get_api_keys()
@@ -620,46 +639,44 @@ class MainApp(TkinterDnD.Tk):  # Inherit from TkinterDnD.Tk
         # Create a dictionary to store the entry widgets
         api_entries = {}
 
-        # Iterate through the desired API keys
+        # Create entries for each API key
         for api_name in ["openai", "anthropic", "deepl", "adobe", "elevenlabs", "google"]:
-            # Create a frame for each API key
             frame = ttk.Frame(api_config_window)
             frame.pack(pady=5, padx=10, fill="x")
 
-            # Create label
             label = ttk.Label(frame, text=f"{api_name.capitalize()} API Key:")
             label.pack(side=tk.LEFT, padx=5)
 
-            # Create entry field
             entry = ttk.Entry(frame, width=40)
             entry.pack(side=tk.LEFT, expand=True, fill="x", padx=5)
 
-            # Insert current API key, if available
             if api_name in api_keys:
                 entry.insert(0, api_keys[api_name])
 
-            # Store the entry widget in the dictionary
             api_entries[api_name] = entry
 
-        # --- Save Button ---
-        save_button = ttk.Button(api_config_window, text="Save", command=lambda: self.save_api_keys(api_entries, api_config_window))
+        # Save Button
+        save_button = ttk.Button(api_config_window, text="Save", 
+                               command=lambda: self.save_api_keys(api_entries, api_config_window))
         save_button.pack(pady=10)
 
     def save_api_keys(self, api_entries, window):
         """Saves the API keys from the configuration dialog."""
-        # Retrieve the API keys from the entry widgets
-        api_keys = {}
-        for api_name, entry in api_entries.items():
-            api_keys[api_name] = entry.get()
+        try:
+            api_keys = {name: entry.get().strip() 
+                       for name, entry in api_entries.items() 
+                       if entry.get().strip()}
 
-        # Update the config manager's api_keys
-        self.config_manager.api_keys = api_keys  # Update the internal dictionary first
-        
-        # Save the API keys to the configuration file
-        self.config_manager.save_api_keys()  # Don't pass api_keys as an argument
-        window.destroy()  # Close the configuration window
-        messagebox.showinfo("Info", "API keys saved successfully.")
-
+            self.config_manager.api_keys = api_keys
+            self.config_manager.save_api_keys()
+            
+            window.destroy()
+            messagebox.showinfo("Success", "API keys saved successfully.")
+            logging.info(f"Saved API keys for services: {list(api_keys.keys())}")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save API keys: {str(e)}")
+            logging.error(f"Error saving API keys: {e}")
 
     def process_progress_queue(self):
         """Processes messages from the progress queue."""
@@ -668,16 +685,16 @@ class MainApp(TkinterDnD.Tk):  # Inherit from TkinterDnD.Tk
                 message = self.progress_queue.get_nowait()
                 self.update_progress_text(message)
         except queue.Empty:
-            pass  # Queue is empty, do nothing
+            pass
 
-        self.after(100, self.process_progress_queue)  # Check again after 100ms
+        self.after(100, self.process_progress_queue)
 
     def update_progress_text(self, message):
         """Updates the progress text area with a new message."""
-        self.progress_text.config(state="normal")  # Enable editing
+        self.progress_text.config(state="normal")
         self.progress_text.insert(tk.END, message + "\n")
-        self.progress_text.config(state="disabled")  # Disable editing
-        self.progress_text.see(tk.END)  # Scroll to the end
+        self.progress_text.see(tk.END)
+        self.progress_text.config(state="disabled")
 
 if __name__ == "__main__":
     app = MainApp()
