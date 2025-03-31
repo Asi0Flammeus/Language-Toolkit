@@ -72,157 +72,125 @@ class ConfigManager:
 
 
 class ToolBase:
-    """
-    Base class for all tools in the application.  Handles common functionalities
-    like file selection, output path management, and progress updates.
-    """
-
-    def __init__(self, master, config_manager, progress_queue):
-        self.master = master
-        self.config_manager = config_manager
-        self.progress_queue = progress_queue  # Receive progress updates
-        self.input_paths = []
-        self.output_path = None
-        self.supported_languages = self.config_manager.get_languages()  # Load supported languages
-
     def select_input_paths(self):
         """Opens a dialog to select one or more input files or directories."""
-        paths = filedialog.askopenfilenames(title="Select Input Files/Directories")
+        paths = filedialog.askdirectory(title="Select Input Directory") if self.__class__.__name__ == "PPTXTranslationTool" \
+               else filedialog.askopenfilenames(title="Select Input Files")
+        
         if paths:
-            self.input_paths = [Path(p) for p in paths]
+            if isinstance(paths, str):  # Single directory selected
+                self.input_paths = [Path(paths)]
+            else:  # Multiple files selected
+                self.input_paths = [Path(p) for p in paths]
             logging.info(f"Input paths selected: {self.input_paths}")
-            self.update_input_display()  # Update GUI display
-            return True  # Indicate success
-        return False  # Indicate failure
-
-    def select_output_path(self):
-        """Opens a dialog to select an output directory."""
-        path = filedialog.askdirectory(title="Select Output Directory")
-        if path:
-            self.output_path = Path(path)
-            logging.info(f"Output path selected: {self.output_path}")
-            self.update_output_display()  # Update GUI display
-            return True  # Indicate success
-        return False  # Indicate failure
-
-    def set_same_as_input(self):
-        """Sets the output path to be the same as the input path."""
-        if self.input_paths:
-            # If multiple input paths, take the parent of the first one
-            self.output_path = self.input_paths[0].parent
-            logging.info(f"Output path set to same as input: {self.output_path}")
-            self.update_output_display()
+            self.update_input_display()
             return True
-        else:
-            messagebox.showwarning("Warning", "Please select input paths first.")
-            return False
+        return False
 
+    def update_input_display(self):
+        """Updates the input paths display."""
+        if hasattr(self, 'input_paths_display'):
+            self.input_paths_display.configure(state='normal')
+            self.input_paths_display.delete(1.0, tk.END)
+            for path in self.input_paths:
+                self.input_paths_display.insert(tk.END, f"{path}\n")
+            self.input_paths_display.configure(state='disabled')
+
+    def update_output_display(self):
+        """Updates the output path display."""
+        if hasattr(self, 'output_path_display'):
+            self.output_path_display.configure(state='normal')
+            self.output_path_display.delete(1.0, tk.END)
+            if self.output_path:
+                self.output_path_display.insert(tk.END, str(self.output_path))
+            self.output_path_display.configure(state='disabled')
 
     def process_paths(self):
-        """
-        Processes the selected input paths.  This should be overridden by subclasses
-        to implement the specific tool logic.  Handles both single files and directories,
-        and applies the tool recursively to maintain directory structure if an output
-        path is provided.
-        """
+        """Enhanced process_paths method with recursive directory handling."""
         if not self.input_paths:
             messagebox.showerror("Error", "No input paths selected.")
             return
 
         if self.output_path is None:
-             result = messagebox.askyesno("Question", "No output path selected.  Output to same directory as input?")
-             if result:
+            result = messagebox.askyesno("Question", 
+                "No output path selected. Output to same directory as input?")
+            if result:
                 if not self.set_same_as_input():
-                    return # Abort if setting same as input fails
-             else:
+                    return
+            else:
                 messagebox.showinfo("Info", "Processing cancelled.")
                 return
-            
+
         # Start the processing in a separate thread
         threading.Thread(target=self._process_paths_threaded, daemon=True).start()
-    
+
     def _process_paths_threaded(self):
-        """
-        Helper function to run the path processing in a separate thread, allowing
-        for progress updates and a responsive GUI.
-        """
+        """Enhanced threaded processing with recursive directory handling."""
         try:
-            self.before_processing()  # Perform setup before processing starts
+            self.before_processing()
+
+            total_files = self._count_files()
+            processed_files = 0
 
             for input_path in self.input_paths:
                 if input_path.is_file():
-                    self.process_file(input_path, self.output_path)
+                    self._process_single_file(input_path, self.output_path)
+                    processed_files += 1
+                    self.send_progress_update(f"Processed {processed_files}/{total_files} files")
                 elif input_path.is_dir():
-                    self.process_directory(input_path, self.output_path)
-                else:
-                    self.send_progress_update(f"Skipping invalid path: {input_path}")
+                    for file_path in self._get_files_recursively(input_path):
+                        output_subdir = self._get_output_subdir(file_path, input_path)
+                        self._process_single_file(file_path, output_subdir)
+                        processed_files += 1
+                        self.send_progress_update(f"Processed {processed_files}/{total_files} files")
 
-            self.after_processing()  # Perform cleanup and finalization after processing is complete
+            self.after_processing()
 
         except Exception as e:
             logging.exception("An error occurred during processing:")
             self.send_progress_update(f"Error: {e}")
-
         finally:
             self.send_progress_update("Processing complete.")
 
-    def process_file(self, input_file: Path, output_dir: Path = None):
-        """
-        Processes a single file.  This method *must* be overridden by subclasses
-        to implement the specific tool logic for a single file.
-        """
-        raise NotImplementedError("Subclasses must implement process_file()")
+    def _count_files(self):
+        """Counts total number of files to be processed."""
+        total = 0
+        for path in self.input_paths:
+            if path.is_file():
+                total += 1
+            elif path.is_dir():
+                total += sum(1 for _ in self._get_files_recursively(path))
+        return total
 
-    def process_directory(self, input_dir: Path, output_dir: Path = None):
-        """
-        Processes a directory recursively.  If an output directory is provided,
-        it maintains the directory structure.  Calls `process_file` for each file found.
-        """
-        if output_dir:
-            # Create corresponding directory structure in the output path
-            relative_path = input_dir.relative_to(self.input_paths[0]) # Assuming self.input_paths[0] is the base input dir
-            target_dir = output_dir / relative_path
-            target_dir.mkdir(parents=True, exist_ok=True)
+    def _get_files_recursively(self, directory):
+        """Generator that yields all relevant files in directory tree."""
+        for path in directory.rglob("*"):
+            if path.is_file() and self._is_supported_file(path):
+                yield path
 
-            for item in input_dir.iterdir():
-                if item.is_file():
-                    self.process_file(item, target_dir)
-                elif item.is_dir():
-                    self.process_directory(item, target_dir)  # Recursive call
-        else:
-            # Output to the same directory as the input (no directory structure maintained)
-            for item in input_dir.iterdir():
-                if item.is_file():
-                    self.process_file(item, input_dir)
-                elif item.is_dir():
-                    self.process_directory(item, input_dir)  # Recursive call
+    def _is_supported_file(self, file_path):
+        """Check if file is supported by the tool."""
+        return file_path.suffix.lower() == ".pptx"
 
-    def before_processing(self):
-        """
-        Performs any setup or initialization steps before processing starts.
-        Can be overridden by subclasses.
-        """
-        pass
+    def _get_output_subdir(self, file_path, input_base_path):
+        """Maintains directory structure in output path."""
+        if self.output_path == input_base_path:
+            return input_base_path
+        
+        relative_path = file_path.parent.relative_to(input_base_path)
+        output_subdir = self.output_path / relative_path
+        output_subdir.mkdir(parents=True, exist_ok=True)
+        return output_subdir
 
-    def after_processing(self):
-        """
-        Performs any cleanup or finalization steps after processing is complete.
-        Can be overridden by subclasses.
-        """
-        pass
+    def _process_single_file(self, file_path, output_dir):
+        """Process a single file with proper error handling."""
+        try:
+            self.send_progress_update(f"Processing {file_path.name}...")
+            self.process_file(file_path, output_dir)
+        except Exception as e:
+            self.send_progress_update(f"Error processing {file_path.name}: {e}")
+            logging.exception(f"Error processing {file_path}")
 
-    def send_progress_update(self, message: str):
-        """Sends a progress update message to the GUI."""
-        self.progress_queue.put(message)
-
-    # --- GUI Update Methods --- (To be implemented in subclasses)
-    def update_input_display(self):
-        """Updates the GUI to display the selected input paths."""
-        pass
-
-    def update_output_display(self):
-        """Updates the GUI to display the selected output path."""
-        pass
 class PPTXToPNGTool(ToolBase):
     """Converts PPTX files to PNG images (slides by slides) using LibreOffice and ImageMagick."""
 
@@ -440,31 +408,94 @@ class PPTXTranslationTool(ToolBase):
         self.api_key = config_manager.get_api_keys().get("deepl", None) # Example
 
     def process_file(self, input_file: Path, output_dir: Path = None):
-        """Translates a single PPTX file."""
+        """Processes a single PPTX file."""
         if input_file.suffix.lower() != ".pptx":
             self.send_progress_update(f"Skipping non-PPTX file: {input_file}")
             return
 
         try:
             self.send_progress_update(f"Translating {input_file.name}...")
-
-            # Translation logic (replace with your actual translation API call)
-            translated_file = self.translate_pptx(input_file, self.source_lang.get(), self.target_lang.get(), output_dir)
-
-            self.send_progress_update(f"Successfully translated {input_file.name} to {translated_file.name}")
+            output_file = self.translate_pptx(input_file, self.source_lang.get(), 
+                                            self.target_lang.get(), output_dir)
+            self.send_progress_update(f"Successfully translated: {output_file.name}")
 
         except Exception as e:
             error_message = f"Error translating {input_file.name}: {e}"
             self.send_progress_update(error_message)
             logging.exception(error_message)
 
+
+
     def translate_pptx(self, input_file: Path, source_lang: str, target_lang: str, output_dir: Path) -> Path:
         """
-        Placeholder for PPTX translation API call.  Replace with your actual
-        translation logic (e.g., using DeepL).
+        Translates a PPTX file using DeepL API.
         """
-        #Mock translation
-        return Path("dummy_translated.pptx")
+        try:
+            import pptx
+            from pptx import Presentation
+            import deepl
+
+            # Initialize DeepL translator
+            api_key = self.api_key
+            if not api_key:
+                raise ValueError("DeepL API key not configured")
+            
+            translator = deepl.Translator(api_key)
+            
+            # Load the presentation
+            prs = Presentation(input_file)
+            
+            # Track translation progress
+            total_shapes = sum(len(slide.shapes) for slide in prs.slides)
+            processed_shapes = 0
+            
+            # Iterate through all slides and shapes
+            for slide in prs.slides:
+                for shape in slide.shapes:
+                    if hasattr(shape, "text") and shape.text.strip():
+                        try:
+                            # Translate the text
+                            translated_text = translator.translate_text(
+                                shape.text,
+                                source_lang=source_lang,
+                                target_lang=target_lang
+                            )
+                            
+                            # Update the shape with translated text
+                            text_frame = shape.text_frame
+                            text_frame.clear()
+                            p = text_frame.paragraphs[0]
+                            p.text = translated_text.text
+                            
+                            # Maintain original formatting
+                            for run in p.runs:
+                                run.font.name = shape.text_frame.paragraphs[0].runs[0].font.name
+                                run.font.size = shape.text_frame.paragraphs[0].runs[0].font.size
+                                
+                        except Exception as e:
+                            self.send_progress_update(f"Error translating shape: {e}")
+                    
+                    processed_shapes += 1
+                    if processed_shapes % 10 == 0:  # Update progress every 10 shapes
+                        progress = (processed_shapes / total_shapes) * 100
+                        self.send_progress_update(f"Translation progress: {progress:.1f}%")
+            
+            # Create output filename
+            output_file = output_dir / f"{input_file.stem}_{target_lang}{input_file.suffix}"
+            
+            # Save the translated presentation
+            prs.save(output_file)
+            
+            self.send_progress_update(f"Translation completed: {output_file}")
+            return output_file
+            
+        except ImportError:
+            self.send_progress_update("Required libraries not installed. Please install python-pptx and deepl")
+            raise
+        except Exception as e:
+            self.send_progress_update(f"Translation failed: {str(e)}")
+            raise
+
 
 class MainApp(TkinterDnD.Tk):  # Inherit from TkinterDnD.Tk
     """Main application class."""
@@ -527,17 +558,27 @@ class MainApp(TkinterDnD.Tk):  # Inherit from TkinterDnD.Tk
         """Creates the UI elements for a specific tool."""
         # --- Input Path Selection ---
         input_frame = ttk.Frame(frame)
-        input_frame.pack(pady=5)
+        input_frame.pack(pady=5, fill='x', padx=5)
 
         input_label = ttk.Label(input_frame, text="Input Path(s):")
         input_label.pack(side=tk.LEFT, padx=5)
 
         input_button = ttk.Button(input_frame, text="Select Input", command=tool.select_input_paths)
         input_button.pack(side=tk.LEFT, padx=5)
+
+        # Add text display for input paths
+        tool.input_paths_display = tk.Text(input_frame, height=3, width=50, wrap=tk.WORD)
+        tool.input_paths_display.pack(side=tk.LEFT, padx=5, fill='x', expand=True)
+        
+        # Add scrollbar for input paths
+        input_scrollbar = ttk.Scrollbar(input_frame, orient="vertical", command=tool.input_paths_display.yview)
+        input_scrollbar.pack(side=tk.RIGHT, fill='y')
+        tool.input_paths_display.configure(yscrollcommand=input_scrollbar.set)
+        tool.input_paths_display.configure(state='disabled')  # Make read-only
         
         # --- Output Path Selection ---
         output_frame = ttk.Frame(frame)
-        output_frame.pack(pady=5)
+        output_frame.pack(pady=5, fill='x', padx=5)
 
         output_label = ttk.Label(output_frame, text="Output Path:")
         output_label.pack(side=tk.LEFT, padx=5)
@@ -548,13 +589,19 @@ class MainApp(TkinterDnD.Tk):  # Inherit from TkinterDnD.Tk
         same_as_input_button = ttk.Button(output_frame, text="Same as Input", command=tool.set_same_as_input)
         same_as_input_button.pack(side=tk.LEFT, padx=5)
 
+        # Add text display for output path
+        tool.output_path_display = tk.Text(output_frame, height=1, width=50)
+        tool.output_path_display.pack(side=tk.LEFT, padx=5, fill='x', expand=True)
+        tool.output_path_display.configure(state='disabled')  # Make read-only
+
         # --- Process Button ---
         process_button = ttk.Button(frame, text="Process", command=tool.process_paths)
         process_button.pack(pady=10)
-        
-        # --- Drag and Drop (Example, add to relevant frames as needed) ---
+
+        # --- Drag and Drop ---
         input_frame.drop_target_register(DND_FILES)
         input_frame.dnd_bind('<<Drop>>', lambda e: self.on_drop(e, tool))
+
     def on_drop(self, event, tool):
         """Handles drag and drop events."""
         # This is a tuple of file paths.
