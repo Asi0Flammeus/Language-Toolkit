@@ -96,6 +96,16 @@ class ToolBase:
         self.input_paths_display = None
         self.output_path_display = None
 
+        self.stop_flag = threading.Event()
+        self.processing_thread = None
+
+    def stop_processing(self):
+        """Signals the processing to stop."""
+        if self.stop_flag:
+            self.stop_flag.set()
+            self.send_progress_update("Stopping processing... Please wait.")
+            logging.info("Stop processing requested")
+
     def create_selection_mode_controls(self, parent_frame):
         """Creates radio buttons for selection mode."""
         mode_frame = ttk.LabelFrame(parent_frame, text="Selection Mode")
@@ -182,7 +192,7 @@ class ToolBase:
         return sorted(files)  # Sort files for consistent processing order
 
     def process_paths(self):
-        """Enhanced process_paths method with recursive directory handling."""
+        """Enhanced process_paths method with stop functionality."""
         if not self.input_paths:
             messagebox.showerror("Error", "No input paths selected.")
             return
@@ -199,14 +209,21 @@ class ToolBase:
                 messagebox.showinfo("Info", "Processing cancelled.")
                 return
 
-        threading.Thread(target=self._process_paths_threaded, daemon=True).start()
+        # Reset stop flag before starting new processing
+        self.stop_flag.clear()
+        
+        # Store thread reference for stopping
+        self.processing_thread = threading.Thread(
+            target=self._process_paths_threaded, 
+            daemon=True
+        )
+        self.processing_thread.start()
 
     def _process_paths_threaded(self):
-        """Enhanced threaded processing with recursive directory handling."""
+        """Enhanced threaded processing with stop functionality."""
         try:
             self.before_processing()
             
-            # Collect all files to process
             files_to_process = []
             if self.selection_mode.get() == "folder":
                 for input_path in self.input_paths:
@@ -218,8 +235,12 @@ class ToolBase:
             self.send_progress_update(f"Found {total_files} files to process")
 
             for index, file_path in enumerate(files_to_process, 1):
+                # Check if processing should stop
+                if self.stop_flag.is_set():
+                    self.send_progress_update("Processing stopped by user")
+                    return
+
                 try:
-                    # Determine output directory maintaining directory structure
                     if self.selection_mode.get() == "folder":
                         relative_path = file_path.parent.relative_to(self.input_paths[0])
                         output_dir = self.output_path / relative_path
@@ -246,7 +267,10 @@ class ToolBase:
             self.send_progress_update(error_msg)
             logging.exception(error_msg)
         finally:
+            self.stop_flag.clear()
+            self.processing_thread = None
             self.send_progress_update("Processing complete")
+
 
     def send_progress_update(self, message: str):
         """Sends a progress update message to the GUI."""
@@ -432,6 +456,8 @@ class PPTXTranslationTool(ToolBase):
             
             # Translate each shape with text
             for slide in prs.slides:
+                if self.stop_flag.is_set():
+                    raise InterruptedError("Processing stopped by user")
                 for shape in slide.shapes:
                     if hasattr(shape, "text") and shape.text.strip():
                         try:
@@ -593,6 +619,10 @@ class AudioTranscriptionTool(ToolBase):
         for audio_file in audio_files:
             for attempt in range(max_retries):
                 try:
+                    # Check if processing should stop
+                    if self.stop_flag.is_set():
+                        raise InterruptedError("Processing stopped by user")
+
                     with open(audio_file, "rb") as f:
                         client = openai.OpenAI(api_key=self.api_key)
                         transcript = client.audio.transcriptions.create(
@@ -721,6 +751,8 @@ class MainApp(TkinterDnD.Tk):
 
         tool.input_paths_display = tk.Text(input_frame, height=3, width=50, wrap=tk.WORD)
         tool.input_paths_display.pack(side=tk.LEFT, padx=5, fill='x', expand=True)
+
+
         
         input_scrollbar = ttk.Scrollbar(input_frame, orient="vertical", 
                                       command=tool.input_paths_display.yview)
@@ -747,13 +779,77 @@ class MainApp(TkinterDnD.Tk):
         tool.output_path_display.pack(side=tk.LEFT, padx=5, fill='x', expand=True)
         tool.output_path_display.configure(state='disabled')
 
+        # Button Frame
+        button_frame = ttk.Frame(frame)
+        button_frame.pack(pady=10)
+
         # Process Button
-        process_button = ttk.Button(frame, text="Process", command=tool.process_paths)
-        process_button.pack(pady=10)
+        tool.process_button = ttk.Button(
+            button_frame, 
+            text="Process", 
+            command=lambda: self.start_processing(tool)
+        )
+        tool.process_button.pack(side=tk.LEFT, padx=5)
+
+        # Stop Button
+        tool.stop_button = ttk.Button(
+            button_frame, 
+            text="Stop", 
+            command=lambda: self.stop_processing(tool),
+            state=tk.DISABLED
+        )
+        tool.stop_button.pack(side=tk.LEFT, padx=5)
 
         # Drag and Drop
         input_frame.drop_target_register(DND_FILES)
         input_frame.dnd_bind('<<Drop>>', lambda e: self.on_drop(e, tool))
+
+    def start_processing(self, tool):
+        """Starts processing and updates button states."""
+        tool.process_button.configure(state=tk.DISABLED)
+        tool.stop_button.configure(state=tk.NORMAL)
+        tool.process_paths()
+        
+        # Start checking if processing is complete
+        self.check_processing_complete(tool)
+
+    def stop_processing(self, tool):
+        """Stops processing and updates button states."""
+        tool.stop_processing()
+        tool.stop_button.configure(state=tk.DISABLED)
+        
+        # Wait for processing to actually stop
+        if tool.processing_thread:
+            tool.processing_thread.join(timeout=1.0)
+        
+        tool.process_button.configure(state=tk.NORMAL)
+
+    def check_processing_complete(self, tool):
+        """Checks if processing is complete and updates button states."""
+        if not tool.processing_thread or not tool.processing_thread.is_alive():
+            tool.process_button.configure(state=tk.NORMAL)
+            tool.stop_button.configure(state=tk.DISABLED)
+        else:
+            # Check again in 100ms
+            self.after(100, lambda: self.check_processing_complete(tool))
+
+    def process_progress_queue(self):
+        """Processes messages from the progress queue."""
+        try:
+            while True:
+                message = self.progress_queue.get_nowait()
+                self.update_progress_text(message)
+                
+                # Enable process button if processing is complete
+                if message == "Processing complete" or message == "Processing stopped by user":
+                    for tool in [self.pptx_translation_tool, self.audio_transcription_tool]:
+                        tool.process_button.configure(state=tk.NORMAL)
+                        tool.stop_button.configure(state=tk.DISABLED)
+                
+        except queue.Empty:
+            pass
+        
+        self.after(100, self.process_progress_queue)
 
     def on_drop(self, event, tool):
         """Handles drag and drop events."""
