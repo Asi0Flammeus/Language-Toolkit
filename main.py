@@ -74,7 +74,6 @@ class ConfigManager:
             logging.info("API keys saved successfully")
         except Exception as e:
             logging.error(f"Error saving API keys: {e}")
-
 class ToolBase:
     """Base class for all tools in the application."""
     
@@ -87,23 +86,46 @@ class ToolBase:
         self.output_path = None
         self.supported_languages = self.config_manager.get_languages()
         
+        # Add selection mode variable
+        self.selection_mode = tk.StringVar(value="file")  # "file" or "folder"
+        
+        # Define supported extensions for the tool (to be overridden by child classes)
+        self.supported_extensions = set()
+        
         # Initialize display attributes
         self.input_paths_display = None
         self.output_path_display = None
 
-    def select_input_paths(self):
-        """Opens a dialog to select one or more input files or directories."""
-        paths = filedialog.askdirectory(title="Select Input Directory") if isinstance(self, PPTXTranslationTool) \
-               else filedialog.askopenfilenames(title="Select Input Files")
+    def create_selection_mode_controls(self, parent_frame):
+        """Creates radio buttons for selection mode."""
+        mode_frame = ttk.LabelFrame(parent_frame, text="Selection Mode")
+        mode_frame.pack(fill='x', padx=5, pady=5)
         
-        if paths:
-            if isinstance(paths, str):  # Single directory selected
-                self.input_paths = [Path(paths)]
-            else:  # Multiple files selected
+        ttk.Radiobutton(mode_frame, text="Single File", 
+                       variable=self.selection_mode, 
+                       value="file").pack(side=tk.LEFT, padx=10)
+        ttk.Radiobutton(mode_frame, text="Folder (Recursive)", 
+                       variable=self.selection_mode, 
+                       value="folder").pack(side=tk.LEFT, padx=10)
+
+    def select_input_paths(self):
+        """Opens a dialog to select input files or directory based on mode."""
+        if self.selection_mode.get() == "folder":
+            path = filedialog.askdirectory(title="Select Input Directory")
+            if path:
+                self.input_paths = [Path(path)]
+                self.update_input_display()
+                return True
+        else:
+            paths = filedialog.askopenfilenames(
+                title="Select Input Files",
+                filetypes=[("Supported Files", 
+                          [f"*{ext}" for ext in self.supported_extensions])]
+            )
+            if paths:
                 self.input_paths = [Path(p) for p in paths]
-            logging.info(f"Input paths selected: {self.input_paths}")
-            self.update_input_display()
-            return True
+                self.update_input_display()
+                return True
         return False
 
     def select_output_path(self):
@@ -119,7 +141,10 @@ class ToolBase:
     def set_same_as_input(self):
         """Sets the output path to be the same as the input path."""
         if self.input_paths:
-            self.output_path = self.input_paths[0].parent
+            if self.selection_mode.get() == "folder":
+                self.output_path = self.input_paths[0]
+            else:
+                self.output_path = self.input_paths[0].parent
             logging.info(f"Output path set to same as input: {self.output_path}")
             self.update_output_display()
             return True
@@ -145,6 +170,17 @@ class ToolBase:
                 self.output_path_display.insert(tk.END, str(self.output_path))
             self.output_path_display.configure(state='disabled')
 
+    def get_all_files_recursive(self, directory: Path) -> list:
+        """Recursively gets all supported files from directory."""
+        files = []
+        try:
+            for item in directory.rglob("*"):
+                if item.is_file() and item.suffix.lower() in self.supported_extensions:
+                    files.append(item)
+        except Exception as e:
+            self.send_progress_update(f"Error scanning directory {directory}: {e}")
+        return sorted(files)  # Sort files for consistent processing order
+
     def process_paths(self):
         """Enhanced process_paths method with recursive directory handling."""
         if not self.input_paths:
@@ -152,8 +188,10 @@ class ToolBase:
             return
 
         if self.output_path is None:
-            result = messagebox.askyesno("Question", 
-                "No output path selected. Output to same directory as input?")
+            result = messagebox.askyesno(
+                "Question", 
+                "No output path selected. Output to same directory as input?"
+            )
             if result:
                 if not self.set_same_as_input():
                     return
@@ -167,68 +205,48 @@ class ToolBase:
         """Enhanced threaded processing with recursive directory handling."""
         try:
             self.before_processing()
+            
+            # Collect all files to process
+            files_to_process = []
+            if self.selection_mode.get() == "folder":
+                for input_path in self.input_paths:
+                    files_to_process.extend(self.get_all_files_recursive(input_path))
+            else:
+                files_to_process = self.input_paths
 
-            total_files = self._count_files()
-            processed_files = 0
+            total_files = len(files_to_process)
+            self.send_progress_update(f"Found {total_files} files to process")
 
-            for input_path in self.input_paths:
-                if input_path.is_file():
-                    self._process_single_file(input_path, self.output_path)
-                    processed_files += 1
-                    self.send_progress_update(f"Processed {processed_files}/{total_files} files")
-                elif input_path.is_dir():
-                    for file_path in self._get_files_recursively(input_path):
-                        output_subdir = self._get_output_subdir(file_path, input_path)
-                        self._process_single_file(file_path, output_subdir)
-                        processed_files += 1
-                        self.send_progress_update(f"Processed {processed_files}/{total_files} files")
+            for index, file_path in enumerate(files_to_process, 1):
+                try:
+                    # Determine output directory maintaining directory structure
+                    if self.selection_mode.get() == "folder":
+                        relative_path = file_path.parent.relative_to(self.input_paths[0])
+                        output_dir = self.output_path / relative_path
+                    else:
+                        output_dir = self.output_path
+
+                    output_dir.mkdir(parents=True, exist_ok=True)
+
+                    self.send_progress_update(
+                        f"Processing file {index}/{total_files}: {file_path.name}"
+                    )
+                    self.process_file(file_path, output_dir)
+
+                except Exception as e:
+                    self.send_progress_update(
+                        f"Error processing {file_path.name}: {str(e)}"
+                    )
+                    logging.exception(f"Error processing {file_path}")
 
             self.after_processing()
 
         except Exception as e:
-            logging.exception("An error occurred during processing:")
-            self.send_progress_update(f"Error: {e}")
+            error_msg = f"Error during processing: {str(e)}"
+            self.send_progress_update(error_msg)
+            logging.exception(error_msg)
         finally:
-            self.send_progress_update("Processing complete.")
-
-    def _count_files(self):
-        """Counts total number of files to be processed."""
-        total = 0
-        for path in self.input_paths:
-            if path.is_file():
-                total += 1
-            elif path.is_dir():
-                total += sum(1 for _ in self._get_files_recursively(path))
-        return total
-
-    def _get_files_recursively(self, directory):
-        """Generator that yields all relevant files in directory tree."""
-        for path in directory.rglob("*"):
-            if path.is_file() and self._is_supported_file(path):
-                yield path
-
-    def _is_supported_file(self, file_path):
-        """Check if file is supported by the tool."""
-        return file_path.suffix.lower() == ".pptx"
-
-    def _get_output_subdir(self, file_path, input_base_path):
-        """Maintains directory structure in output path."""
-        if self.output_path == input_base_path:
-            return input_base_path
-        
-        relative_path = file_path.parent.relative_to(input_base_path)
-        output_subdir = self.output_path / relative_path
-        output_subdir.mkdir(parents=True, exist_ok=True)
-        return output_subdir
-
-    def _process_single_file(self, file_path, output_dir):
-        """Process a single file with proper error handling."""
-        try:
-            self.send_progress_update(f"Processing {file_path.name}...")
-            self.process_file(file_path, output_dir)
-        except Exception as e:
-            self.send_progress_update(f"Error processing {file_path.name}: {e}")
-            logging.exception(f"Error processing {file_path}")
+            self.send_progress_update("Processing complete")
 
     def send_progress_update(self, message: str):
         """Sends a progress update message to the GUI."""
@@ -242,9 +260,31 @@ class ToolBase:
         """Hook for post-processing cleanup."""
         pass
 
-    def process_file(self, input_file: Path, output_dir: Path = None):
+    def process_file(self, input_file: Path, output_dir: Path):
         """Abstract method for processing a single file."""
         raise NotImplementedError("Subclasses must implement process_file()")
+
+    def handle_drop(self, event):
+        """Handles drag and drop events."""
+        files = event.data.split()
+        
+        # Filter files based on selection mode and supported extensions
+        if self.selection_mode.get() == "folder":
+            self.input_paths = [Path(f) for f in files if Path(f).is_dir()]
+        else:
+            self.input_paths = [
+                Path(f) for f in files 
+                if Path(f).is_file() and Path(f).suffix.lower() in self.supported_extensions
+            ]
+        
+        if self.input_paths:
+            logging.info(f"Files dropped: {self.input_paths}")
+            self.update_input_display()
+        else:
+            messagebox.showwarning(
+                "Warning", 
+                "No valid input paths found. Please check selection mode and file types."
+            )
 
 
 class PPTXTranslationTool(ToolBase):
@@ -252,6 +292,7 @@ class PPTXTranslationTool(ToolBase):
 
     def __init__(self, master, config_manager, progress_queue):
         super().__init__(master, config_manager, progress_queue)
+        self.supported_extensions = {'.pptx'}
         
         # Language selection variables
         self.source_lang = tk.StringVar(value="en")
@@ -510,14 +551,16 @@ class PPTXTranslationTool(ToolBase):
         except Exception as e:
             raise Exception(f"Translation failed: {str(e)}")
 
+
 class AudioTranscriptionTool(ToolBase):
     """Transcribes audio files using OpenAI's Whisper API."""
 
     def __init__(self, master, config_manager, progress_queue):
         super().__init__(master, config_manager, progress_queue)
+        # Define supported extensions
+        self.supported_extensions = {'.wav', '.mp3', '.m4a', '.webm', 
+                                   '.mp4', '.mpga', '.mpeg'}
         
-        # Supported audio extensions
-        self.AUDIO_EXTENSIONS = ('.wav', '.mp3', '.m4a', '.webm', '.mp4', '.mpga', '.mpeg')
         self.MAX_SUPPORTED_AUDIO_SIZE_MB = 20
 
         # Get OpenAI API key from config
@@ -525,12 +568,8 @@ class AudioTranscriptionTool(ToolBase):
         if not self.api_key:
             logging.warning("OpenAI API key not configured")
 
-    def process_file(self, input_file: Path, output_dir: Path = None):
+    def process_file(self, input_file: Path, output_dir: Path):
         """Processes a single audio file."""
-        if input_file.suffix.lower() not in self.AUDIO_EXTENSIONS:
-            self.send_progress_update(f"Skipping non-audio file: {input_file}")
-            return
-
         try:
             self.send_progress_update(f"Transcribing {input_file.name}...")
             transcript = self.transcribe_audio(input_file, output_dir)
@@ -664,6 +703,8 @@ class MainApp(TkinterDnD.Tk):
     def create_tool_ui(self, frame, tool):
         """Creates the UI elements for a specific tool."""
         
+        tool.create_selection_mode_controls(frame)
+
         # If the tool is PPTXTranslationTool, let it create its language selection UI
         if isinstance(tool, PPTXTranslationTool):
             tool.create_language_selection()
