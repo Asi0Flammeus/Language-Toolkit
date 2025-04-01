@@ -10,6 +10,7 @@ import threading
 import queue
 import time
 import openai
+import deepl
 
 # --- Constants ---
 SUPPORTED_LANGUAGES_FILE = "supported_languages.json"
@@ -310,8 +311,85 @@ class ToolBase:
                 "No valid input paths found. Please check selection mode and file types."
             )
 
+class LanguageSelectionMixin:
+    """Mixin class for language selection functionality."""
+    
+    def create_language_selection(self):
+        """Creates the language selection UI elements."""
+        # Language selection frame
+        self.lang_frame = ttk.LabelFrame(self.master, text="Language Selection")
+        self.lang_frame.pack(fill='x', padx=5, pady=5)
 
-class PPTXTranslationTool(ToolBase):
+        # Source language
+        source_frame = ttk.Frame(self.lang_frame)
+        source_frame.pack(side=tk.LEFT, padx=5, pady=5)
+        
+        ttk.Label(source_frame, text="Source Language:").pack(side=tk.LEFT, padx=5)
+        self.source_lang_combo = ttk.Combobox(
+            source_frame, 
+            textvariable=self.source_lang,
+            values=list(self.supported_languages.get("source_languages", {}).keys()),
+            state="readonly",
+            width=10
+        )
+        self.source_lang_combo.pack(side=tk.LEFT, padx=5)
+
+        # Target language
+        target_frame = ttk.Frame(self.lang_frame)
+        target_frame.pack(side=tk.LEFT, padx=5, pady=5)
+        
+        ttk.Label(target_frame, text="Target Language:").pack(side=tk.LEFT, padx=5)
+        self.target_lang_combo = ttk.Combobox(
+            target_frame, 
+            textvariable=self.target_lang,
+            values=list(self.supported_languages.get("target_languages", {}).keys()),
+            state="readonly",
+            width=10
+        )
+        self.target_lang_combo.pack(side=tk.LEFT, padx=5)
+
+        # Add language info tooltips
+        self.add_language_tooltips()
+
+    def add_language_tooltips(self):
+        """Adds tooltips to show full language names on hover."""
+        def create_tooltip(widget, text):
+            def show_tooltip(event):
+                tooltip = tk.Toplevel()
+                tooltip.wm_overrideredirect(True)
+                tooltip.wm_geometry(f"+{event.x_root+10}+{event.y_root+10}")
+                
+                label = ttk.Label(tooltip, text=text, background="#ffffe0", 
+                                relief='solid', borderwidth=1)
+                label.pack()
+                
+                def hide_tooltip():
+                    tooltip.destroy()
+                
+                widget.tooltip = tooltip
+                widget.after(2000, hide_tooltip)
+            
+            def hide_tooltip(event):
+                if hasattr(widget, 'tooltip'):
+                    widget.tooltip.destroy()
+            
+            widget.bind('<Enter>', show_tooltip)
+            widget.bind('<Leave>', hide_tooltip)
+
+        # Add tooltips for source languages
+        source_languages = self.supported_languages.get("source_languages", {})
+        source_tooltip_text = "Available source languages:\n" + \
+                            "\n".join(f"{code}: {name}" for code, name in source_languages.items())
+        create_tooltip(self.source_lang_combo, source_tooltip_text)
+
+        # Add tooltips for target languages
+        target_languages = self.supported_languages.get("target_languages", {})
+        target_tooltip_text = "Available target languages:\n" + \
+                            "\n".join(f"{code}: {name}" for code, name in target_languages.items())
+        create_tooltip(self.target_lang_combo, target_tooltip_text)
+
+
+class PPTXTranslationTool(ToolBase, LanguageSelectionMixin):
     """Translates PPTX files from one language to another."""
 
     def __init__(self, master, config_manager, progress_queue):
@@ -321,9 +399,6 @@ class PPTXTranslationTool(ToolBase):
         # Language selection variables
         self.source_lang = tk.StringVar(value="en")
         self.target_lang = tk.StringVar(value="fr")
-        
-        # Create language selection frame
-        self.create_language_selection()
         
         self.api_key = self.config_manager.get_api_keys().get("deepl")
         if not self.api_key:
@@ -669,6 +744,158 @@ class AudioTranscriptionTool(ToolBase):
         output_file = output_dir / f"{input_file.stem}_transcript.txt"
         output_file.write_text(transcript, encoding='utf-8')
 
+class TextTranslationTool(ToolBase, LanguageSelectionMixin):
+    """Translates text files using DeepL API."""
+
+    def __init__(self, master, config_manager, progress_queue):
+        super().__init__(master, config_manager, progress_queue)
+        
+        # Define supported extensions
+        self.supported_extensions = {'.txt'}
+        
+        # Language selection variables
+        self.source_lang = tk.StringVar(value="en")
+        self.target_lang = tk.StringVar(value="fr")
+        
+        # Get API key
+        self.api_key = self.config_manager.get_api_keys().get("deepl")
+        if not self.api_key:
+            logging.warning("DeepL API key not configured")
+
+    def create_language_selection(self):
+        """Creates the language selection UI elements."""
+        # Language selection frame
+        self.lang_frame = ttk.LabelFrame(self.master, text="Language Selection")
+        self.lang_frame.pack(fill='x', padx=5, pady=5)
+
+        # Source language
+        source_frame = ttk.Frame(self.lang_frame)
+        source_frame.pack(side=tk.LEFT, padx=5, pady=5)
+        
+        ttk.Label(source_frame, text="Source Language:").pack(side=tk.LEFT, padx=5)
+        self.source_lang_combo = ttk.Combobox(
+            source_frame, 
+            textvariable=self.source_lang,
+            values=list(self.supported_languages.get("source_languages", {}).keys()),
+            state="readonly",
+            width=10
+        )
+        self.source_lang_combo.pack(side=tk.LEFT, padx=5)
+
+        # Target language
+        target_frame = ttk.Frame(self.lang_frame)
+        target_frame.pack(side=tk.LEFT, padx=5, pady=5)
+        
+        ttk.Label(target_frame, text="Target Language:").pack(side=tk.LEFT, padx=5)
+        self.target_lang_combo = ttk.Combobox(
+            target_frame, 
+            textvariable=self.target_lang,
+            values=list(self.supported_languages.get("target_languages", {}).keys()),
+            state="readonly",
+            width=10
+        )
+        self.target_lang_combo.pack(side=tk.LEFT, padx=5)
+
+    def process_file(self, input_file: Path, output_dir: Path):
+        """Processes a single text file."""
+        try:
+            self.send_progress_update(f"Translating {input_file.name}...")
+            
+            # Check for interruption
+            if self.stop_flag.is_set():
+                raise InterruptedError("Processing stopped by user")
+
+            # Create output file path
+            output_file = output_dir / f"{input_file.stem}_{self.target_lang.get()}{input_file.suffix}"
+
+            # Read source file
+            with open(input_file, 'r', encoding='utf-8') as f:
+                source_text = f.read()
+
+            # Translate text
+            translated_text = self.translate_text(
+                source_text,
+                self.source_lang.get(),
+                self.target_lang.get()
+            )
+
+            # Save translated text
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write(translated_text)
+
+            self.send_progress_update(f"Successfully translated: {input_file.name}")
+
+        except InterruptedError:
+            raise
+        except Exception as e:
+            error_message = f"Error translating {input_file.name}: {str(e)}"
+            self.send_progress_update(error_message)
+            logging.exception(error_message)
+
+    def translate_text(self, text: str, source_lang: str, target_lang: str, max_retries=3, retry_delay=5) -> str:
+        """Translates text using DeepL API with retry mechanism."""
+        if not self.api_key:
+            raise ValueError("DeepL API key not configured. Please add your API key in the Configuration menu.")
+
+        if not text.strip():
+            return text
+
+        # Get language mappings from supported_languages.json
+        source_languages = self.supported_languages.get("source_languages", {})
+        target_languages = self.supported_languages.get("target_languages", {})
+
+        # Validate languages
+        if source_lang not in source_languages:
+            raise ValueError(f"Unsupported source language: {source_lang}")
+        if target_lang not in target_languages:
+            raise ValueError(f"Unsupported target language: {target_lang}")
+
+        translator = deepl.Translator(self.api_key.strip())
+
+        for attempt in range(max_retries):
+            # Check for interruption
+            if self.stop_flag.is_set():
+                raise InterruptedError("Processing stopped by user")
+
+            try:
+                # Test API connection on first attempt
+                if attempt == 0:
+                    try:
+                        translator.get_usage()
+                    except deepl.exceptions.AuthorizationException:
+                        raise ValueError("Invalid DeepL API key. Please check your API key.")
+                    except Exception as e:
+                        raise ValueError(f"Error connecting to DeepL API: {str(e)}")
+
+                # Perform translation
+                result = translator.translate_text(
+                    text,
+                    source_lang=source_lang,
+                    target_lang=target_lang
+                )
+                return result.text
+
+            except InterruptedError:
+                raise
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    self.send_progress_update(
+                        f"Translation attempt {attempt + 1} failed: {str(e)}. Retrying in {retry_delay} seconds..."
+                    )
+                    time.sleep(retry_delay)
+                else:
+                    raise Exception(f"Translation failed after {max_retries} attempts: {str(e)}")
+
+    def before_processing(self):
+        """Pre-processing setup."""
+        if not self.api_key:
+            raise ValueError("DeepL API key not configured. Please add your API key in the Configuration menu.")
+
+    def after_processing(self):
+        """Post-processing cleanup."""
+        pass
+
+
 class MainApp(TkinterDnD.Tk):
     """Main application class."""
 
@@ -702,6 +929,7 @@ class MainApp(TkinterDnD.Tk):
         # Tool Frames
         self.pptx_translation_tool = self.create_tool_tab("PPTX Translation", PPTXTranslationTool)
         self.audio_transcription_tool = self.create_tool_tab("Audio Transcription", AudioTranscriptionTool)
+        self.text_translation_tool = self.create_tool_tab("Text Translation", TextTranslationTool)
 
 
         # Progress Text Area
@@ -735,13 +963,14 @@ class MainApp(TkinterDnD.Tk):
         
         tool.create_selection_mode_controls(frame)
 
-        # If the tool is PPTXTranslationTool, let it create its language selection UI
-        if isinstance(tool, PPTXTranslationTool):
+        # If the tool has language selection capability, create the UI
+        if isinstance(tool, LanguageSelectionMixin):
             tool.create_language_selection()
-    
+        
         # Input Path Selection
         input_frame = ttk.Frame(frame)
         input_frame.pack(pady=5, fill='x', padx=5)
+
 
         input_label = ttk.Label(input_frame, text="Input Path(s):")
         input_label.pack(side=tk.LEFT, padx=5)
