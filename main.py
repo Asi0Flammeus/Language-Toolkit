@@ -8,6 +8,8 @@ import logging
 from pathlib import Path
 import threading
 import queue
+import time
+import openai
 
 # --- Constants ---
 SUPPORTED_LANGUAGES_FILE = "supported_languages.json"
@@ -508,6 +510,96 @@ class PPTXTranslationTool(ToolBase):
         except Exception as e:
             raise Exception(f"Translation failed: {str(e)}")
 
+class AudioTranscriptionTool(ToolBase):
+    """Transcribes audio files using OpenAI's Whisper API."""
+
+    def __init__(self, master, config_manager, progress_queue):
+        super().__init__(master, config_manager, progress_queue)
+        
+        # Supported audio extensions
+        self.AUDIO_EXTENSIONS = ('.wav', '.mp3', '.m4a', '.webm', '.mp4', '.mpga', '.mpeg')
+        self.MAX_SUPPORTED_AUDIO_SIZE_MB = 20
+
+        # Get OpenAI API key from config
+        self.api_key = self.config_manager.get_api_keys().get("openai")
+        if not self.api_key:
+            logging.warning("OpenAI API key not configured")
+
+    def process_file(self, input_file: Path, output_dir: Path = None):
+        """Processes a single audio file."""
+        if input_file.suffix.lower() not in self.AUDIO_EXTENSIONS:
+            self.send_progress_update(f"Skipping non-audio file: {input_file}")
+            return
+
+        try:
+            self.send_progress_update(f"Transcribing {input_file.name}...")
+            transcript = self.transcribe_audio(input_file, output_dir)
+            self.save_transcript(transcript, input_file, output_dir)
+            self.send_progress_update(f"Successfully transcribed: {input_file.name}")
+
+        except Exception as e:
+            error_message = f"Error transcribing {input_file.name}: {e}"
+            self.send_progress_update(error_message)
+            logging.exception(error_message)
+
+    def transcribe_audio(self, input_file: Path, output_dir: Path, max_retries=10, retry_delay=5):
+        """Transcribes an audio file using OpenAI's Whisper API."""
+        if not self.api_key:
+            raise ValueError("OpenAI API key not configured. Please add your API key in the Configuration menu.")
+
+        # Check file size and split if necessary
+        audio_files = self.prepare_audio_files(input_file, output_dir)
+        transcript_texts = []
+
+        for audio_file in audio_files:
+            for attempt in range(max_retries):
+                try:
+                    with open(audio_file, "rb") as f:
+                        client = openai.OpenAI(api_key=self.api_key)
+                        transcript = client.audio.transcriptions.create(
+                            model="whisper-1",
+                            file=f
+                        )
+                        transcript_texts.append(transcript.text)
+                        break
+                except Exception as e:
+                    if attempt == max_retries - 1:
+                        raise Exception(f"Transcription failed after {max_retries} attempts: {str(e)}")
+                    self.send_progress_update(f"Attempt {attempt + 1} failed: {str(e)}. Retrying...")
+                    time.sleep(retry_delay)
+
+            # Clean up temporary files if they were created
+            if audio_file != input_file:
+                audio_file.unlink()
+
+        return " ".join(transcript_texts)
+
+    def prepare_audio_files(self, input_file: Path, output_dir: Path) -> list:
+        """Prepares audio files for transcription, splitting if necessary."""
+        audio_size_mb = input_file.stat().st_size / (1024 * 1024)
+        
+        if audio_size_mb <= self.MAX_SUPPORTED_AUDIO_SIZE_MB:
+            return [input_file]
+
+        # Split audio file if it's too large
+        audio = AudioSegment.from_file(str(input_file))
+        chunk_size_ms = int((self.MAX_SUPPORTED_AUDIO_SIZE_MB * 1024 * 1024 * 8) / 1000)
+        duration_ms = len(audio)
+        
+        chunks = []
+        for i in range(0, duration_ms, chunk_size_ms):
+            chunk = audio[i:i + chunk_size_ms]
+            chunk_file = output_dir / f"{input_file.stem}_chunk_{i//chunk_size_ms}{input_file.suffix}"
+            chunk.export(str(chunk_file), format=input_file.suffix.lstrip('.'))
+            chunks.append(chunk_file)
+            
+        return chunks
+
+    def save_transcript(self, transcript: str, input_file: Path, output_dir: Path):
+        """Saves the transcript to a text file."""
+        output_file = output_dir / f"{input_file.stem}_transcript.txt"
+        output_file.write_text(transcript, encoding='utf-8')
+
 class MainApp(TkinterDnD.Tk):
     """Main application class."""
 
@@ -540,6 +632,8 @@ class MainApp(TkinterDnD.Tk):
 
         # Tool Frames
         self.pptx_translation_tool = self.create_tool_tab("PPTX Translation", PPTXTranslationTool)
+        self.audio_transcription_tool = self.create_tool_tab("Audio Transcription", AudioTranscriptionTool)
+
 
         # Progress Text Area
         self.progress_label = tk.Label(self, text="Progress:")
