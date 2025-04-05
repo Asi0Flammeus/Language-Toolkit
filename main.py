@@ -11,6 +11,10 @@ import queue
 import time
 import openai
 import deepl
+import pptx
+from pptx import Presentation
+from pptx.dml.color import RGBColor
+from pptx.enum.dml import MSO_THEME_COLOR, MSO_COLOR_TYPE
 
 # --- Constants ---
 SUPPORTED_LANGUAGES_FILE = "supported_languages.json"
@@ -496,24 +500,22 @@ class PPTXTranslationTool(ToolBase, LanguageSelectionMixin):
             self.send_progress_update(error_message)
             logging.exception(error_message)
 
+
     def translate_pptx(self, input_file: Path, source_lang: str, target_lang: str, output_dir: Path) -> Path:
         """Translates a PPTX file using DeepL API."""
         try:
-            import pptx
-            from pptx import Presentation
-            import deepl
 
             # Get and validate API key
             api_key = self.config_manager.get_api_keys().get("deepl")
             if not api_key:
                 raise ValueError("DeepL API key not configured. Please add your API key in the Configuration menu.")
-            
+
             # Validate API key format
             if not isinstance(api_key, str) or len(api_key.strip()) < 10:
                 raise ValueError("Invalid DeepL API key format. Please check your API key.")
 
             translator = deepl.Translator(api_key.strip())
-            
+
             # Test API connection
             try:
                 translator.get_usage()
@@ -524,133 +526,200 @@ class PPTXTranslationTool(ToolBase, LanguageSelectionMixin):
 
             # Load the presentation
             prs = Presentation(input_file)
-            
+
             # Track translation progress
             total_shapes = sum(len(slide.shapes) for slide in prs.slides)
             processed_shapes = 0
-            
+
             # Translate each shape with text
-            for slide in prs.slides:
+            for slide_idx, slide in enumerate(prs.slides):
                 if self.stop_flag.is_set():
                     raise InterruptedError("Processing stopped by user")
-                for shape in slide.shapes:
-                    if hasattr(shape, "text") and shape.text.strip():
-                        try:
-                            # Store original formatting
-                            original_paras = []
-                            for para in shape.text_frame.paragraphs:
-                                para_format = {
-                                    'alignment': para.alignment,
-                                    'level': para.level,
-                                    'line_spacing': para.line_spacing,
-                                    'space_before': para.space_before,
-                                    'space_after': para.space_after,
-                                    'runs': []
+                self.send_progress_update(f"Processing Slide {slide_idx + 1}/{len(prs.slides)}")
+                for shape_idx, shape in enumerate(slide.shapes):
+                    if self.stop_flag.is_set():
+                        raise InterruptedError("Processing stopped by user")
+
+                    # Check if shape has a text frame and text
+                    if not shape.has_text_frame or not shape.text_frame.text.strip():
+                        processed_shapes += 1
+                        continue # Skip shapes without text
+
+                    try:
+                        text_frame = shape.text_frame
+                        original_paras_data = []
+
+                        # --- Store original formatting (Modified) ---
+                        for para in text_frame.paragraphs:
+                            para_data = {
+                                'text': para.text, # Store original text for reference if needed
+                                'alignment': para.alignment,
+                                'level': para.level,
+                                'line_spacing': para.line_spacing,
+                                'space_before': para.space_before,
+                                'space_after': para.space_after,
+                                'runs': []
+                            }
+
+                            for run in para.runs:
+                                font = run.font
+                                color_info = None
+                                # --- Correctly handle color types ---
+                                if font.color and hasattr(font.color, 'type'): # Check if color exists and has type
+                                    if font.color.type == MSO_COLOR_TYPE.RGB:
+                                        color_info = ('rgb', font.color.rgb)
+                                    elif font.color.type == MSO_COLOR_TYPE.SCHEME:
+                                        # Store theme color enum and brightness
+                                        color_info = ('scheme', font.color.theme_color, getattr(font.color, 'brightness', 0.0))
+                                    # Add elif for other MSO_COLOR_TYPE if needed (e.g., PRESET)
+                                # --- End color handling ---
+
+                                run_data = {
+                                    'text': run.text, # Store original run text
+                                    'font_name': font.name,
+                                    'size': font.size,
+                                    'bold': font.bold,
+                                    'italic': font.italic,
+                                    'underline': font.underline,
+                                    'color_info': color_info, # Store the structured color info
+                                    'language': getattr(font, 'language_id', None) # Use getattr for safety
                                 }
-                                
-                                for run in para.runs:
-                                    run_format = {
-                                        'font_name': run.font.name,
-                                        'size': run.font.size,
-                                        'bold': run.font.bold,
-                                        'italic': run.font.italic,
-                                        'underline': run.font.underline,
-                                        'color': run.font.color.rgb if run.font.color else None,
-                                        'language': run.font.language_id if hasattr(run.font, 'language_id') else None
-                                    }
-                                    para_format['runs'].append(run_format)
-                                original_paras.append(para_format)
+                                para_data['runs'].append(run_data)
+                            original_paras_data.append(para_data)
 
-                            # Translate the text
-                            translated_text = translator.translate_text(
-                                shape.text,
-                                source_lang=source_lang,
-                                target_lang=target_lang
-                            )
-                            
-                            # Clear existing text
-                            text_frame = shape.text_frame
-                            text_frame.clear()
-                            
-                            # Split translated text into paragraphs
-                            translated_paragraphs = translated_text.text.split('\n')
-                            
-                            # Restore formatting
-                            for i, (trans_text, orig_format) in enumerate(zip(translated_paragraphs, original_paras)):
-                                if i == 0:
-                                    p = text_frame.paragraphs[0]
-                                else:
-                                    p = text_frame.add_paragraph()
-                                
-                                # Restore paragraph formatting
-                                p.alignment = orig_format['alignment']
-                                p.level = orig_format['level']
-                                if orig_format['line_spacing']:
-                                    p.line_spacing = orig_format['line_spacing']
-                                if orig_format['space_before']:
-                                    p.space_before = orig_format['space_before']
-                                if orig_format['space_after']:
-                                    p.space_after = orig_format['space_after']
+                        # --- Translate the text ---
+                        original_full_text = text_frame.text # Get the full text once
+                        if not original_full_text.strip():
+                             processed_shapes += 1
+                             continue # Skip if effectively empty after stripping
 
-                                # Add text and restore run formatting
-                                if orig_format['runs']:
-                                    # Split translated text proportionally among runs
-                                    words = trans_text.split()
-                                    runs_count = len(orig_format['runs'])
-                                    words_per_run = len(words) // runs_count
-                                    extra_words = len(words) % runs_count
+                        translated_text_obj = translator.translate_text(
+                            original_full_text,
+                            source_lang=source_lang,
+                            target_lang=target_lang
+                        )
+                        translated_full_text = translated_text_obj.text
 
-                                    start_idx = 0
-                                    for j, run_format in enumerate(orig_format['runs']):
-                                        # Calculate words for this run
-                                        word_count = words_per_run + (1 if j < extra_words else 0)
-                                        end_idx = start_idx + word_count
-                                        run_text = ' '.join(words[start_idx:end_idx])
-                                        start_idx = end_idx
+                        # --- Restore formatting (Modified) ---
+                        text_frame.clear() # Clear existing content
 
-                                        # Add run with original formatting
-                                        run = p.add_run()
-                                        run.text = run_text + (' ' if j < runs_count - 1 else '')
-                                        
-                                        # Restore run formatting
-                                        font = run.font
-                                        if run_format['font_name']:
-                                            font.name = run_format['font_name']
-                                        if run_format['size']:
-                                            font.size = run_format['size']
-                                        if run_format['bold']:
-                                            font.bold = run_format['bold']
-                                        if run_format['italic']:
-                                            font.italic = run_format['italic']
-                                        if run_format['underline']:
-                                            font.underline = run_format['underline']
-                                        if run_format['color']:
-                                            font.color.rgb = run_format['color']
-                                        if run_format['language']:
-                                            font.language_id = run_format['language']
-                                else:
-                                    # If no runs in original, add text as single run
-                                    p.text = trans_text
-                                    
-                        except Exception as e:
-                            self.send_progress_update(f"Error translating shape: {e}")
-                    
+                        # Heuristic: Try to map translated text back to original structure.
+                        # This is complex. A simpler approach is often to apply paragraph/first run formatting.
+                        # Let's try a basic approach: apply formatting paragraph by paragraph,
+                        # and run by run within the paragraph, distributing the translated text.
+
+                        translated_paras = translated_full_text.split('\n')
+                        num_orig_paras = len(original_paras_data)
+                        num_trans_paras = len(translated_paras)
+
+                        for i, trans_para_text in enumerate(translated_paras):
+                            # Determine which original paragraph's style to mimic
+                            orig_para_idx = min(i, num_orig_paras - 1)
+                            orig_para_data = original_paras_data[orig_para_idx]
+
+                            # Add paragraph (first one exists, add subsequent ones)
+                            if i == 0:
+                                p = text_frame.paragraphs[0]
+                                p.text = '' # Clear any default text in the first paragraph
+                            else:
+                                p = text_frame.add_paragraph()
+
+                            # Apply paragraph formatting
+                            p.alignment = orig_para_data['alignment']
+                            p.level = orig_para_data['level']
+                            if orig_para_data['line_spacing']: p.line_spacing = orig_para_data['line_spacing']
+                            if orig_para_data['space_before']: p.space_before = orig_para_data['space_before']
+                            if orig_para_data['space_after']: p.space_after = orig_para_data['space_after']
+
+                            # Apply run formatting - Distribute text and styles
+                            orig_runs_data = orig_para_data['runs']
+                            num_orig_runs = len(orig_runs_data)
+
+                            if not orig_runs_data: # If original paragraph had no runs (e.g., empty)
+                                p.text = trans_para_text # Just add the text
+                                continue
+
+                            # Simple distribution: Apply styles run-by-run, splitting translated text
+                            words = trans_para_text.split()
+                            total_words = len(words)
+                            start_idx = 0
+
+                            for j, run_data in enumerate(orig_runs_data):
+                                # Calculate approx words for this run based on original run length proportion (or just divide equally)
+                                # Equal division is simpler here:
+                                words_for_this_run = total_words // num_orig_runs
+                                if j < total_words % num_orig_runs:
+                                    words_for_this_run += 1
+
+                                end_idx = start_idx + words_for_this_run
+                                run_text = ' '.join(words[start_idx:end_idx])
+                                start_idx = end_idx
+
+                                if not run_text and j < num_orig_runs -1 : # Avoid adding empty runs unless it's the last one potentially
+                                    continue
+
+                                run = p.add_run()
+                                run.text = run_text + (' ' if j < num_orig_runs - 1 and run_text else '') # Add space between runs
+
+                                # Apply run formatting
+                                font = run.font
+                                if run_data['font_name']: font.name = run_data['font_name']
+                                if run_data['size']: font.size = run_data['size']
+                                # Explicitly set False if stored as False
+                                font.bold = run_data['bold'] if run_data['bold'] is not None else None
+                                font.italic = run_data['italic'] if run_data['italic'] is not None else None
+                                font.underline = run_data['underline'] if run_data['underline'] is not None else None # Check underline type if needed
+
+                                # --- Restore color correctly ---
+                                stored_color_info = run_data['color_info']
+                                if stored_color_info:
+                                    color_type, value1, *rest = stored_color_info
+                                    if color_type == 'rgb':
+                                        try:
+                                            font.color.rgb = RGBColor(*value1) # Pass tuple elements to RGBColor
+                                        except Exception as color_e:
+                                            self.send_progress_update(f"Warn: Failed to set RGB color {value1}: {color_e}")
+                                    elif color_type == 'scheme':
+                                        try:
+                                            font.color.theme_color = value1
+                                            if rest: # Brightness was stored
+                                                font.color.brightness = rest[0]
+                                        except Exception as color_e:
+                                             self.send_progress_update(f"Warn: Failed to set theme color {value1}: {color_e}")
+                                # --- End color restoration ---
+
+                                if run_data['language']: font.language_id = run_data['language']
+
+
+                    except InterruptedError:
+                        raise # Propagate stop request
+                    except Exception as e:
+                        self.send_progress_update(f"Error translating shape {shape_idx+1} on slide {slide_idx+1}: {e}")
+                        logging.warning(f"Error translating shape {shape_idx+1} on slide {slide_idx+1} in {input_file.name}: {e}", exc_info=True) # Log with traceback for debugging
+
                     processed_shapes += 1
-                    if processed_shapes % 10 == 0:
+                    if total_shapes > 0 and processed_shapes % 5 == 0: # Update progress more frequently
                         progress = (processed_shapes / total_shapes) * 100
-                        self.send_progress_update(f"Translation progress: {progress:.1f}%")
+                        self.send_progress_update(f"Translation progress: {progress:.1f}% ({processed_shapes}/{total_shapes} shapes)")
+
 
             # Create output filename
             output_file = output_dir / f"{input_file.stem}_{target_lang}{input_file.suffix}"
-            
+
             # Save the translated presentation
             prs.save(output_file)
             return output_file
-            
+
         except ImportError:
             raise ImportError("Required libraries not installed. Please install python-pptx and deepl")
+        except InterruptedError:
+             self.send_progress_update(f"Translation stopped for {input_file.name}")
+             raise # Re-raise to stop processing loop
         except Exception as e:
-            raise Exception(f"Translation failed: {str(e)}")
+            # Ensure specific error types from DeepL/pptx are caught if needed
+            raise Exception(f"Translation failed for {input_file.name}: {str(e)}")
+
+
 
 
 class AudioTranscriptionTool(ToolBase):
