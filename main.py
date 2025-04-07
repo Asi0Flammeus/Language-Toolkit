@@ -553,10 +553,9 @@ class PPTXTranslationTool(ToolBase, LanguageSelectionMixin):
                         text_frame = shape.text_frame
                         original_paras_data = []
 
-                        # --- Store original formatting (Modified) ---
                         for para in text_frame.paragraphs:
                             para_data = {
-                                'text': para.text, # Store original text for reference if needed
+                                'text': para.text,
                                 'alignment': para.alignment,
                                 'level': para.level,
                                 'line_spacing': para.line_spacing,
@@ -568,18 +567,14 @@ class PPTXTranslationTool(ToolBase, LanguageSelectionMixin):
                             for run in para.runs:
                                 font = run.font
                                 color_info = None
-                                # --- Correctly handle color types ---
-                                if font.color and hasattr(font.color, 'type'): # Check if color exists and has type
+                                if font.color and hasattr(font.color, 'type'): 
                                     if font.color.type == MSO_COLOR_TYPE.RGB:
                                         color_info = ('rgb', font.color.rgb)
                                     elif font.color.type == MSO_COLOR_TYPE.SCHEME:
-                                        # Store theme color enum and brightness
                                         color_info = ('scheme', font.color.theme_color, getattr(font.color, 'brightness', 0.0))
-                                    # Add elif for other MSO_COLOR_TYPE if needed (e.g., PRESET)
-                                # --- End color handling ---
 
                                 run_data = {
-                                    'text': run.text, # Store original run text
+                                    'text': run.text, 
                                     'font_name': font.name,
                                     'size': font.size,
                                     'bold': font.bold,
@@ -604,13 +599,8 @@ class PPTXTranslationTool(ToolBase, LanguageSelectionMixin):
                         )
                         translated_full_text = translated_text_obj.text
 
-                        # --- Restore formatting (Modified) ---
                         text_frame.clear() # Clear existing content
 
-                        # Heuristic: Try to map translated text back to original structure.
-                        # This is complex. A simpler approach is often to apply paragraph/first run formatting.
-                        # Let's try a basic approach: apply formatting paragraph by paragraph,
-                        # and run by run within the paragraph, distributing the translated text.
 
                         translated_paras = translated_full_text.split('\n')
                         num_orig_paras = len(original_paras_data)
@@ -649,8 +639,6 @@ class PPTXTranslationTool(ToolBase, LanguageSelectionMixin):
                             start_idx = 0
 
                             for j, run_data in enumerate(orig_runs_data):
-                                # Calculate approx words for this run based on original run length proportion (or just divide equally)
-                                # Equal division is simpler here:
                                 words_for_this_run = total_words // num_orig_runs
                                 if j < total_words % num_orig_runs:
                                     words_for_this_run += 1
@@ -674,7 +662,6 @@ class PPTXTranslationTool(ToolBase, LanguageSelectionMixin):
                                 font.italic = run_data['italic'] if run_data['italic'] is not None else None
                                 font.underline = run_data['underline'] if run_data['underline'] is not None else None # Check underline type if needed
 
-                                # --- Restore color correctly ---
                                 stored_color_info = run_data['color_info']
                                 if stored_color_info:
                                     color_type, value1, *rest = stored_color_info
@@ -690,7 +677,6 @@ class PPTXTranslationTool(ToolBase, LanguageSelectionMixin):
                                                 font.color.brightness = rest[0]
                                         except Exception as color_e:
                                              self.send_progress_update(f"Warn: Failed to set theme color {value1}: {color_e}")
-                                # --- End color restoration ---
 
                                 if run_data['language']: font.language_id = run_data['language']
 
@@ -1416,6 +1402,271 @@ class PPTXtoPDFTool(ToolBase):
         self.send_progress_update("Adobe REST API conversion batch finished.")
 
 
+class TextToSpeechTool(ToolBase):
+    """
+    Converts text files (.txt) to MP3 audio using the ElevenLabs API.
+    Expects input filenames like 'some_name_voicename.txt'.
+    Looks up 'voicename' in 'elevenlabs_voices.json' to get the voice_id.
+    Requires 'elevenlabs_api_key' in 'api_keys.json'.
+    """
+
+    # --- Constants ---
+    ELEVENLABS_API_URL_BASE = "https://api.elevenlabs.io/v1"
+    TTS_ENDPOINT_TEMPLATE = "/text-to-speech/{voice_id}/stream"
+    VOICES_CONFIG_FILE = Path("elevenlabs_voices.json") # Adjust path if needed
+    API_KEYS_FILE = Path("api_keys.json") # Path to the API keys file
+    DEFAULT_MODEL = "eleven_multilingual_v2"
+    DEFAULT_VOICE_SETTINGS = {
+        "stability": 0.5,
+        "similarity_boost": 0.8,
+        "style": 0.0,
+        "use_speaker_boost": True
+    }
+    MAX_RETRIES = 5
+    RETRY_DELAY = 3 # Seconds
+
+    def __init__(self, input_dir, output_dir, stop_flag, progress_callback):
+        super().__init__(input_dir, output_dir, stop_flag, progress_callback)
+        self.tool_name = "Text to Speech (ElevenLabs)"
+        self.input_ext = ".txt"
+        self.output_ext = ".mp3"
+        self.voice_map = self._load_voices_config()
+        # Load API key during initialization
+        self.api_key = self._get_api_key()
+        if not self.api_key:
+             # Log error and potentially disable the tool if key is missing/file error
+             logging.error(f"ElevenLabs API Key not found or failed to load from {self.API_KEYS_FILE}. TextToSpeechTool will not work.")
+             # Optional: raise ValueError("ElevenLabs API Key not configured.")
+
+    def _load_voices_config(self) -> dict:
+        """Loads the voice name to voice ID mapping from the JSON config file."""
+        try:
+            with open(self.VOICES_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                voices = json.load(f)
+                logging.info(f"Loaded {len(voices)} voice mappings from {self.VOICES_CONFIG_FILE}")
+                return voices
+        except FileNotFoundError:
+            logging.error(f"CRITICAL: ElevenLabs voices config file not found at {self.VOICES_CONFIG_FILE}")
+            self.send_progress_update(f"ERROR: Voices config file missing: {self.VOICES_CONFIG_FILE.name}")
+            return {}
+        except json.JSONDecodeError as e:
+            logging.error(f"CRITICAL: Error decoding JSON from {self.VOICES_CONFIG_FILE}: {e}")
+            self.send_progress_update(f"ERROR: Invalid JSON in voices config: {self.VOICES_CONFIG_FILE.name}")
+            return {}
+        except Exception as e:
+            logging.error(f"CRITICAL: Unexpected error loading voices config: {e}", exc_info=True)
+            self.send_progress_update(f"ERROR: Failed to load voices config: {self.VOICES_CONFIG_FILE.name}")
+            return {}
+
+    def _get_api_key(self) -> str | None:
+        """Retrieves the ElevenLabs API key from the api_keys.json file."""
+        try:
+            with open(self.API_KEYS_FILE, 'r', encoding='utf-8') as f:
+                keys = json.load(f)
+                api_key = keys.get("elevenlabs")
+                if not api_key:
+                    logging.error(f"'elevenlabs_api_key' not found within {self.API_KEYS_FILE}")
+                    self.send_progress_update(f"ERROR: 'elevenlabs_api_key' missing in {self.API_KEYS_FILE.name}")
+                    return None
+                # Optional: Add a basic check if the key looks like a string
+                if not isinstance(api_key, str) or len(api_key) < 10: # Arbitrary length check
+                     logging.warning(f"Value for 'elevenlabs_api_key' in {self.API_KEYS_FILE} seems invalid.")
+                     # Decide if you want to proceed or return None here
+                logging.info(f"Successfully loaded ElevenLabs API Key from {self.API_KEYS_FILE}")
+                return api_key
+        except FileNotFoundError:
+            logging.error(f"API keys file not found at {self.API_KEYS_FILE}")
+            self.send_progress_update(f"ERROR: API keys file missing: {self.API_KEYS_FILE.name}")
+            return None
+        except json.JSONDecodeError as e:
+            logging.error(f"Error decoding JSON from {self.API_KEYS_FILE}: {e}")
+            self.send_progress_update(f"ERROR: Invalid JSON in API keys file: {self.API_KEYS_FILE.name}")
+            return None
+        except Exception as e:
+            logging.error(f"Unexpected error loading API key from {self.API_KEYS_FILE}: {e}", exc_info=True)
+            self.send_progress_update(f"ERROR: Failed to load API keys from {self.API_KEYS_FILE.name}")
+            return None
+
+    def _parse_voicename(self, filename_stem: str) -> str | None:
+        """Extracts the voicename from the filename stem (e.g., 'chapter1_Rachel' -> 'Rachel')."""
+        # --- This function remains the same as before ---
+        try:
+            if '_' not in filename_stem:
+                return None
+            return filename_stem.rsplit('_', 1)[1]
+        except IndexError:
+            return None
+
+    def process_file(self, input_file: Path, output_dir: Path):
+        """Processes a single text file for TTS conversion."""
+        if not self.api_key:
+            # Error message now refers to the file/loading issue
+            self.send_progress_update(f"Skipping {input_file.name}: ElevenLabs API Key not loaded from {self.API_KEYS_FILE.name}.")
+            logging.warning(f"Skipping {input_file.name} due to missing or invalid API key in {self.API_KEYS_FILE.name}.")
+            return # Cannot proceed without API key
+
+        if not self.voice_map:
+            self.send_progress_update(f"Skipping {input_file.name}: Voice configuration is missing or invalid.")
+            logging.warning(f"Skipping {input_file.name} due to missing voice map.")
+            return # Cannot proceed without voice map
+
+        self.send_progress_update(f"Processing {input_file.name}...")
+
+        # 1. Determine Output Path
+        output_file = output_dir / f"{input_file.stem}{self.output_ext}"
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # 2. Parse Voice Name
+        voicename = self._parse_voicename(input_file.stem)
+        if not voicename:
+            error_msg = f"ERROR: Could not parse voice name from filename '{input_file.name}'. Expected format 'name_voicename.txt'."
+            self.send_progress_update(error_msg)
+            logging.error(error_msg)
+            return
+
+        # 3. Look up Voice ID
+        voice_id = self.voice_map.get(voicename)
+        if not voice_id:
+            error_msg = f"ERROR: Voice name '{voicename}' (from {input_file.name}) not found in {self.VOICES_CONFIG_FILE.name}."
+            self.send_progress_update(error_msg)
+            logging.error(error_msg)
+            return
+        self.send_progress_update(f"Using voice: {voicename} (ID: ...{voice_id[-6:]})")
+
+        # 4. Read Text Content
+        try:
+            text_to_speak = input_file.read_text(encoding='utf-8')
+            if not text_to_speak.strip():
+                 self.send_progress_update(f"Skipping {input_file.name}: File is empty.")
+                 logging.warning(f"Skipping empty file: {input_file.name}")
+                 return
+        except FileNotFoundError:
+            error_msg = f"ERROR: Input file not found: {input_file}"
+            self.send_progress_update(error_msg)
+            logging.error(error_msg)
+            return
+        except Exception as e:
+            error_msg = f"ERROR: Failed to read input file {input_file.name}: {e}"
+            self.send_progress_update(error_msg)
+            logging.error(error_msg, exc_info=True)
+            return
+
+        # 5. Prepare API Request
+        tts_url = f"{self.ELEVENLABS_API_URL_BASE}{self.TTS_ENDPOINT_TEMPLATE.format(voice_id=voice_id)}"
+        headers = {
+            "Accept": "audio/mpeg",
+            "Content-Type": "application/json",
+            "xi-api-key": self.api_key # Use the loaded key
+        }
+        data = {
+            "text": text_to_speak,
+            "model_id": self.DEFAULT_MODEL,
+            "voice_settings": self.DEFAULT_VOICE_SETTINGS
+        }
+
+        # 6. Make API Call with Retries
+        job_failed = False
+        for attempt in range(self.MAX_RETRIES):
+            if self.stop_flag.is_set():
+                self.send_progress_update(f"Stopping conversion for {input_file.name}...")
+                job_failed = True
+                break
+
+            try:
+                self.send_progress_update(f"Requesting TTS from ElevenLabs (Attempt {attempt + 1}/{self.MAX_RETRIES})...")
+                response = requests.post(tts_url, headers=headers, json=data, stream=True, timeout=180)
+                response.raise_for_status()
+
+                self.send_progress_update(f"Saving audio stream to {output_file.name}...")
+                bytes_written = 0
+                with open(output_file, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if self.stop_flag.is_set():
+                            self.send_progress_update(f"Download stopped for {input_file.name}.")
+                            job_failed = True
+                            break
+                        if chunk:
+                            f.write(chunk)
+                            bytes_written += len(chunk)
+
+                if job_failed:
+                     if output_file.exists():
+                         try: output_file.unlink()
+                         except OSError: pass
+                     break
+
+                if not output_file.exists() or bytes_written == 0:
+                     raise RuntimeError("Audio file was not saved correctly (0 bytes written).")
+
+                self.send_progress_update(f"Successfully saved {output_file.name}")
+                logging.info(f"Text-to-speech conversion successful for {input_file.name}")
+                return # Success!
+
+            except requests.exceptions.HTTPError as e:
+                status_code = e.response.status_code
+                error_body = e.response.text
+                logging.error(f"HTTP Error {status_code} on attempt {attempt + 1} for {input_file.name}: {error_body}", exc_info=True)
+                if status_code == 401:
+                    error_msg = f"ERROR: Invalid ElevenLabs API Key (Unauthorized). Check key in {self.API_KEYS_FILE.name}."
+                    self.send_progress_update(error_msg)
+                    job_failed = True
+                    break
+                elif status_code == 422:
+                    error_msg = f"ERROR: Invalid input for ElevenLabs API (422). Check text/settings. Details: {error_body[:200]}"
+                    self.send_progress_update(error_msg)
+                    job_failed = True
+                    break
+                elif status_code == 400:
+                    error_msg = f"ERROR: Bad Request to ElevenLabs API (400). Details: {error_body[:200]}"
+                    self.send_progress_update(error_msg)
+                    job_failed = True
+                    break
+                elif status_code >= 500:
+                    error_msg = f"Server error ({status_code}) from ElevenLabs. Retrying..."
+                    self.send_progress_update(error_msg)
+                else:
+                    error_msg = f"Client error ({status_code}) from ElevenLabs. Details: {error_body[:200]}"
+                    self.send_progress_update(error_msg)
+                    job_failed = True
+                    break
+
+            except requests.exceptions.RequestException as e:
+                logging.warning(f"Network error on attempt {attempt + 1} for {input_file.name}: {e}")
+                error_msg = f"Network error connecting to ElevenLabs. Retrying..."
+                self.send_progress_update(error_msg)
+
+            except (RuntimeError, InterruptedError, OSError, Exception) as e:
+                 error_msg = f"ERROR during TTS processing for {input_file.name}: {e}"
+                 self.send_progress_update(error_msg)
+                 logging.error(error_msg, exc_info=True)
+                 job_failed = True
+                 if output_file.exists():
+                     try: output_file.unlink()
+                     except OSError: pass
+                 break
+
+            if not job_failed and attempt < self.MAX_RETRIES - 1:
+                self.send_progress_update(f"Retrying in {self.RETRY_DELAY} seconds...")
+                for _ in range(self.RETRY_DELAY):
+                    if self.stop_flag.is_set():
+                        self.send_progress_update(f"Stopping before retry for {input_file.name}...")
+                        job_failed = True
+                        break
+                    time.sleep(1)
+                if job_failed: break
+
+        if job_failed and not self.stop_flag.is_set():
+             final_error_msg = f"ERROR: Failed to convert {input_file.name} after {self.MAX_RETRIES} attempts."
+             self.send_progress_update(final_error_msg)
+             logging.error(final_error_msg)
+             if output_file.exists():
+                 try: output_file.unlink()
+                 except OSError as e: logging.warning(f"Could not delete partial output file {output_file}: {e}")
+
+        elif self.stop_flag.is_set():
+             logging.info(f"Conversion stopped for {input_file.name}")
+
+
 
 
 class MainApp(TkinterDnD.Tk):
@@ -1642,12 +1893,10 @@ class MainApp(TkinterDnD.Tk):
             else:
                  label_text = f"{api_name.replace('_', ' ').title()} API Key:"
 
-            # --- FIX IS HERE ---
             # Set the width when CREATING the Label
             label = ttk.Label(frame, text=label_text, width=20) # Set width here
             # Pack the label WITHOUT the width option
             label.pack(side=tk.LEFT, padx=5, anchor='w') # Removed width=20 from here
-            # --- END FIX ---
 
             entry = ttk.Entry(frame, width=45)
             if "secret" in api_name.lower():

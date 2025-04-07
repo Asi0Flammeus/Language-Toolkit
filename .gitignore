@@ -8,3 +8,4 @@ outputs/
 playground.py
 api_keys.json
 test-app/
+elevenlabs_voices.json
