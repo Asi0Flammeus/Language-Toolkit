@@ -1,4 +1,5 @@
 import tkinter as tk
+import convertapi
 from tkinter import ttk, filedialog, messagebox
 from tkinterdnd2 import TkinterDnD, DND_FILES
 import json
@@ -22,7 +23,6 @@ from pptx.enum.dml import MSO_THEME_COLOR, MSO_COLOR_TYPE
 
 # --- Constants ---
 SUPPORTED_LANGUAGES_FILE = "supported_languages.json"
-ELEVENLABS_CONFIG_FILE = "elevenlabs_config.json"
 API_KEYS_FILE = "api_keys.json"
 
 # --- Setup Logging ---
@@ -31,14 +31,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 class ConfigManager:
     """Manages configuration files for the application."""
 
-    def __init__(self, languages_file=SUPPORTED_LANGUAGES_FILE,
-                 elevenlabs_file=ELEVENLABS_CONFIG_FILE, api_keys_file=API_KEYS_FILE):
+    def __init__(self, languages_file=SUPPORTED_LANGUAGES_FILE, api_keys_file=API_KEYS_FILE):
         self.languages_file = Path(languages_file)
-        self.elevenlabs_file = Path(elevenlabs_file)
         self.api_keys_file = Path(api_keys_file)
 
         self.languages = self.load_json(self.languages_file)
-        self.elevenlabs_config = self.load_json(self.elevenlabs_file)
         self.api_keys = self.load_json(self.api_keys_file)
 
     def load_json(self, file_path: Path):
@@ -64,8 +61,6 @@ class ConfigManager:
     def get_languages(self):
         return self.languages
 
-    def get_elevenlabs_config(self):
-        return self.elevenlabs_config
 
     def get_api_keys(self):
         return self.api_keys
@@ -73,8 +68,6 @@ class ConfigManager:
     def save_languages(self):
         self.save_json(self.languages, self.languages_file)
     
-    def save_elevenlabs_config(self):
-        self.save_json(self.elevenlabs_config, self.elevenlabs_file)
 
     def save_api_keys(self, api_entries, window):
         """Saves the API keys entered in the configuration dialog."""
@@ -416,7 +409,8 @@ class LanguageSelectionMixin:
 class TextToSpeechTool(ToolBase):
     """
     Converts text files (.txt) to MP3 audio using the ElevenLabs API.
-    Uses voice name from filename (format: some_name_voicename.txt).
+    Detects voice name anywhere in the filename using the predefined voice list.
+    Voice name can be separated by underscore, hyphen, or space.
     """
 
     def __init__(self, master, config_manager, progress_queue):
@@ -465,14 +459,26 @@ class TextToSpeechTool(ToolBase):
             self.send_progress_update(f"ERROR: Failed to load voices config: {self.VOICES_CONFIG_FILE}")
             return {}
 
-    def _parse_voicename(self, filename_stem: str) -> str | None:
-        """Extracts voice name from the filename stem (e.g., 'chapter1_Rachel' -> 'Rachel')."""
-        try:
-            if '_' not in filename_stem:
-                return None
-            return filename_stem.rsplit('_', 1)[1]
-        except IndexError:
+    def _parse_voicename(self, filename_stem: str):
+        """
+        Extracts voice name from the filename stem by looking for any matching voice name
+        from the voice_map regardless of its position in the filename.
+        """
+        if not self.voice_map:
             return None
+            
+        # Split the filename by common delimiters
+        parts = re.split('[_\- ]', filename_stem.lower())
+        
+        # Look for any part that matches a voice name (case-insensitive)
+        voice_names = {name.lower(): name for name in self.voice_map.keys()}
+        
+        for part in parts:
+            if part in voice_names:
+                return voice_names[part]  # Return the original case of the voice name
+                
+        return None
+
 
     def before_processing(self):
         """Pre-processing setup."""
@@ -505,7 +511,8 @@ class TextToSpeechTool(ToolBase):
             # Look up voice ID
             voice_id = self.voice_map.get(voicename)
             if not voice_id:
-                error_msg = f"Voice name '{voicename}' not found in {self.VOICES_CONFIG_FILE}"
+                error_msg = (f"Could not find a valid voice name in filename '{input_file.name}'. "
+                            f"Filename must include one of these voices: {', '.join(sorted(self.voice_map.keys()))}")
                 self.send_progress_update(f"ERROR: {error_msg}")
                 logging.error(error_msg)
                 return
@@ -1165,30 +1172,15 @@ class TextTranslationTool(ToolBase, LanguageSelectionMixin):
 
 
 class PPTXtoPDFTool(ToolBase):
-    """Converts PPTX files to PDF or PNG using Adobe PDF Services REST API."""
-
-    # Define Adobe API constants
-    ADOBE_IMS_ENDPOINT = "https://ims-na1.adobelogin.com/ims/token/v3"
-    ADOBE_API_BASE_URL = "https://pdf-services-ue1.adobe.io"
-    ADOBE_SCOPES = "openid,AdobeID,read_organizations,pdf_services" # Scopes needed
-
-    # Define required scopes
-    # ADOBE_SCOPES = "openid,AdobeID,read_organizations,pdf_services"
-    ADOBE_SCOPES = "openid,AdobeID,DCAPI"
-
-
-    # Polling settings
-    POLL_INTERVAL_SECONDS = 3
-    POLL_TIMEOUT_SECONDS = 300 # 5 minutes, adjust as needed
+    """
+    Converts PPTX files to PDF or PNG using ConvertAPI service.
+    Supports both PDF conversion and PNG conversion (one PNG per slide).
+    """
 
     def __init__(self, master, config_manager, progress_queue):
         super().__init__(master, config_manager, progress_queue)
-        self.supported_extensions = {'.pptx'}
-        self.output_format = tk.StringVar(value="pdf") # Default to PDF
-        self.adobe_client_id = None
-        self.adobe_client_secret = None
-        self._access_token = None
-        self._token_expires_at = 0 # Timestamp when token expires
+        self.supported_extensions = {'.pptx', '.ppt', '.potx', '.pps', '.ppsx'}
+        self.output_format = tk.StringVar(value="pdf")  # Default to PDF
 
     def create_specific_controls(self, parent_frame):
         """Creates UI elements specific to this tool (output format selection)."""
@@ -1202,612 +1194,79 @@ class PPTXtoPDFTool(ToolBase):
                        variable=self.output_format,
                        value="png").pack(side=tk.LEFT, padx=10)
 
-    def _load_adobe_credentials(self):
-        """Loads Adobe Client ID/Secret from ConfigManager."""
-        api_keys = self.config_manager.get_api_keys()
-        self.adobe_client_id = api_keys.get("adobe_client_id")
-        self.adobe_client_secret = api_keys.get("adobe_client_secret")
-
-        if not self.adobe_client_id or not self.adobe_client_secret:
-            raise ValueError("Missing Adobe Client ID or Client Secret in configuration. Please configure them via the menu.")
-        logging.info("Adobe Client ID/Secret loaded.")
-
-    def _get_access_token(self):
-        """Gets a new access token if needed or expired."""
-        now = time.time()
-        # Refresh slightly before actual expiry
-        if self._access_token and now < (self._token_expires_at - 60):
-            logging.debug("Using existing Adobe access token.")
-            return self._access_token
-
-        self.send_progress_update("Requesting new Adobe access token...")
-        if not self.adobe_client_id or not self.adobe_client_secret:
-             self._load_adobe_credentials() # Try loading again if missing
-
-        payload = {
-            'client_id': self.adobe_client_id,
-            'client_secret': self.adobe_client_secret,
-            'grant_type': 'client_credentials',
-            'scope': self.ADOBE_SCOPES
-        }
-        headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-
-        try:
-            response = requests.post(self.ADOBE_IMS_ENDPOINT, headers=headers, data=payload, timeout=30)
-            response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
-            token_data = response.json()
-
-            if 'access_token' not in token_data or 'expires_in' not in token_data:
-                raise ValueError(f"Invalid token response received: {token_data}")
-
-            self._access_token = token_data['access_token']
-            # expires_in is in milliseconds, convert to seconds for timestamp
-            expires_in_seconds = int(token_data['expires_in']) / 1000
-            self._token_expires_at = now + expires_in_seconds
-            logging.info(f"Successfully obtained Adobe access token, expires in {expires_in_seconds / 60:.1f} minutes.")
-            return self._access_token
-
-        except requests.exceptions.RequestException as e:
-            error_msg = f"Error getting Adobe access token: {e}"
-            logging.error(error_msg)
-            # Check for specific auth errors if possible from response content
-            if hasattr(e, 'response') and e.response is not None:
-                 try:
-                     error_details = e.response.json()
-                     error_msg += f" - Details: {error_details.get('error_description', e.response.text)}"
-                 except json.JSONDecodeError:
-                     error_msg += f" - Status: {e.response.status_code}, Content: {e.response.text}"
-            raise ConnectionError(error_msg) # Raise a specific error type
-        except ValueError as e:
-             raise ValueError(f"Error processing token response: {e}")
-
-
-    def _make_api_call(self, method, url, **kwargs):
-        """Helper function to make authenticated API calls."""
-        access_token = self._get_access_token() # Ensure token is valid
-        headers = kwargs.pop('headers', {})
-        headers['Authorization'] = f'Bearer {access_token}'
-        headers['x-api-key'] = self.adobe_client_id
-
-        # Ensure URL is absolute
-        if not url.startswith('http'):
-            url = self.ADOBE_API_BASE_URL + url
-
-        try:
-            response = requests.request(method, url, headers=headers, timeout=60, **kwargs) # Increased timeout
-            response.raise_for_status()
-            # Check for JSON response before trying to decode
-            if response.content and 'application/json' in response.headers.get('Content-Type', ''):
-                 return response.json()
-            elif response.content:
-                 return response.content # Return raw content for downloads
-            else:
-                 return None # Return None for empty responses (like 201 Created sometimes)
-        except requests.exceptions.HTTPError as e:
-             error_msg = f"API Error ({e.response.status_code}) calling {method} {url}"
-             try:
-                 error_details = e.response.json()
-                 error_msg += f": {error_details.get('message', error_details)}"
-             except json.JSONDecodeError:
-                 error_msg += f": {e.response.text}"
-             logging.error(error_msg)
-             raise RuntimeError(error_msg) # Re-raise as a runtime error
-        except requests.exceptions.RequestException as e:
-             error_msg = f"Network Error calling {method} {url}: {e}"
-             logging.error(error_msg)
-             raise ConnectionError(error_msg)
-
-
-    def _upload_asset(self, file_path: Path) -> str:
-        """Uploads a file to Adobe and returns the asset ID."""
-        self.send_progress_update(f"Uploading {file_path.name} to Adobe...")
-        upload_url = self.ADOBE_API_BASE_URL + "/assets" # Use base URL + endpoint
-
-        # 1. Initiate Upload (Get upload URI)
-        mime_type, _ = mimetypes.guess_type(file_path)
-        if not mime_type:
-             # Make a reasonable guess for pptx if mimetypes fails
-             mime_type = 'application/vnd.openxmlformats-officedocument.presentationml.presentation' if file_path.suffix.lower() == '.pptx' else 'application/octet-stream'
-             logging.warning(f"Could not guess mime type for {file_path.name}, using {mime_type}")
-
-        init_payload = {'mediaType': mime_type}
-        init_headers = {'Content-Type': 'application/json'}
-
-        try:
-             # Need to call _make_api_call directly here as it handles auth
-             upload_info = self._make_api_call('post', upload_url, headers=init_headers, json=init_payload)
-             if not upload_info or 'assetID' not in upload_info or 'uploadUri' not in upload_info:
-                  raise ValueError(f"Invalid response when initiating upload: {upload_info}")
-
-             asset_id = upload_info['assetID']
-             upload_uri = upload_info['uploadUri'] # This is the S3 presigned URL
-             logging.info(f"Obtained upload URI for asset ID: {asset_id}")
-
-             # 2. Upload file content to the obtained URI (NO auth headers needed for S3 presigned URL)
-             with open(file_path, 'rb') as f:
-                  upload_response = requests.put(upload_uri, data=f, headers={'Content-Type': mime_type}, timeout=300) # Long timeout for upload
-                  upload_response.raise_for_status() # Check for S3 upload errors
-
-             self.send_progress_update(f"Successfully uploaded {file_path.name}, Asset ID: {asset_id}")
-             return asset_id
-
-        except (RuntimeError, ConnectionError, ValueError, requests.exceptions.RequestException) as e:
-             error_msg = f"Failed to upload {file_path.name}: {e}"
-             self.send_progress_update(error_msg)
-             logging.error(error_msg)
-             raise # Re-raise the exception to stop processing this file
-
-
-    def _start_job(self, endpoint: str, payload: dict) -> str:
-        """Starts an asynchronous job (like create PDF or export)."""
-        self.send_progress_update(f"Starting job via endpoint: {endpoint}")
-        job_url = self.ADOBE_API_BASE_URL + endpoint
-        headers = {'Content-Type': 'application/json'}
-
-        try:
-            # Use requests directly here to get the Location header easily
-            access_token = self._get_access_token()
-            auth_headers = {
-                'Authorization': f'Bearer {access_token}',
-                'x-api-key': self.adobe_client_id,
-                'Content-Type': 'application/json'
-            }
-            response = requests.post(job_url, headers=auth_headers, json=payload, timeout=60)
-            response.raise_for_status() # Check for 2xx status
-
-            # Job started successfully, get status URL from Location header
-            status_url = response.headers.get('Location')
-            if not status_url:
-                 # Fallback: Sometimes status might be in body (less common now)
-                 try:
-                     resp_json = response.json()
-                     status_url = resp_json.get('statusUri') # Check common variations
-                 except json.JSONDecodeError:
-                     pass # Ignore if body isn't JSON
-
-            if not status_url:
-                 raise ValueError(f"Job started but no status URL found in Location header or response body. Response status: {response.status_code}, Headers: {response.headers}")
-
-            logging.info(f"Job started successfully. Status URL: {status_url}")
-            return status_url
-
-        except (RuntimeError, ConnectionError, ValueError, requests.exceptions.RequestException) as e:
-             error_msg = f"Failed to start job at {endpoint}: {e}"
-             self.send_progress_update(error_msg)
-             logging.error(error_msg)
-             raise
-
-
-    def _poll_job_status(self, status_url: str) -> dict:
-        """Polls the job status URL until completion or failure."""
-        start_time = time.time()
-        while True:
-            if self.stop_flag.is_set():
-                raise InterruptedError("Processing stopped by user during polling.")
-
-            now = time.time()
-            if now - start_time > self.POLL_TIMEOUT_SECONDS:
-                raise TimeoutError(f"Polling job status timed out after {self.POLL_TIMEOUT_SECONDS} seconds for URL: {status_url}")
-
-            self.send_progress_update(f"Checking job status: {status_url.split('/')[-2]}...")
-            try:
-                status_info = self._make_api_call('get', status_url) # Use helper for auth
-                if not status_info or 'status' not in status_info:
-                     raise ValueError(f"Invalid status response: {status_info}")
-
-                job_status = status_info['status']
-                logging.debug(f"Job status: {job_status}")
-
-                if job_status == 'done':
-                    self.send_progress_update("Job completed successfully.")
-                    return status_info # Return the full status info which includes download links
-                elif job_status == 'failed':
-                    error_details = status_info.get('error', {'message': 'Unknown failure reason'})
-                    raise RuntimeError(f"Adobe job failed: {error_details.get('message', error_details)}")
-                elif job_status in ['pending', 'in progress', 'queued']:
-                    # Wait before polling again
-                    time.sleep(self.POLL_INTERVAL_SECONDS)
-                else:
-                    # Unexpected status
-                    raise ValueError(f"Unexpected job status received: {job_status}")
-
-            except (RuntimeError, ConnectionError, ValueError, TimeoutError, InterruptedError) as e:
-                 self.send_progress_update(f"Error polling job status: {e}")
-                 logging.error(f"Error polling job status for {status_url}: {e}")
-                 raise # Re-raise to stop processing
-
-
-    def _download_asset(self, download_uri: str, output_path: Path):
-        """Downloads the result from a download URI (typically a pre-signed S3 URL)."""
-        self.send_progress_update(f"Downloading result to {output_path.name}...")
-        try:
-            response = requests.get(download_uri, stream=True, timeout=300) # Stream for potentially large files
-            response.raise_for_status() # Check for download errors (e.g., 403, 404 from S3)
-
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(output_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192): # Process in chunks
-                    if self.stop_flag.is_set(): # Check for stop signal during download
-                         raise InterruptedError("Download stopped by user.")
-                    f.write(chunk)
-
-            # Check if file was actually written (basic check)
-            if not output_path.is_file() or output_path.stat().st_size == 0:
-                 # Clean up empty file if created
-                 try: output_path.unlink()
-                 except OSError: pass
-                 raise RuntimeError(f"Download finished but output file '{output_path.name}' is missing or empty.")
-
-            self.send_progress_update(f"Successfully saved result: {output_path.name}")
-
-        except requests.exceptions.RequestException as e:
-             error_msg = f"Failed to download result from {download_uri}: {e}"
-             # Add status code if available
-             if hasattr(e, 'response') and e.response is not None:
-                 error_msg += f" (Status code: {e.response.status_code})"
-             logging.error(error_msg, exc_info=True)
-             raise ConnectionError(error_msg)
-        except (RuntimeError, InterruptedError) as e:
-             # Catch errors from file writing or interruption
-             error_msg = f"Error during download/saving for {output_path.name}: {e}"
-             logging.error(error_msg, exc_info=True)
-             # Attempt to clean up partially written file
-             if output_path.exists():
-                 try: output_path.unlink()
-                 except OSError: pass
-             raise # Re-raise the caught error
-
-
     def before_processing(self):
         """Load credentials before starting the batch."""
-        try:
-            self._load_adobe_credentials()
-            # Optionally get the first token here to fail early if creds are bad
-            # self._get_access_token()
-        except ValueError as e:
-            self.send_progress_update(f"Error: {e}")
-            raise # Stop processing if credentials are bad
+        api_keys = self.config_manager.get_api_keys()
+        api_secret = api_keys.get("convertapi")
+        
+        if not api_secret:
+            raise ValueError("Missing ConvertAPI secret in configuration. Please configure it via the menu.")
+        
+        convertapi.api_credentials = api_secret
+        logging.info("ConvertAPI credentials loaded successfully.")
 
 
     def process_file(self, input_file: Path, output_dir: Path):
         """
         Processes a single PPTX file.
-        Converts PPTX to PDF using Adobe PDF Services API.
-        If PNG output is requested, converts the resulting PDF to PNG locally using PyMuPDF.
+        Converts to either PDF or PNG using ConvertAPI.
+        For PNG output, files are renamed to use sequential numbering (00, 01, 02, etc.)
         """
-        output_fmt = self.output_format.get() # Assumes self.output_format is a tk.StringVar holding "pdf" or "png"
-        self.send_progress_update(f"Starting conversion of {input_file.name} to {output_fmt.upper()}...")
-
-        # Define paths
-        # Use a temporary path for the PDF regardless of final output, makes cleanup easier
-        temp_pdf_path = output_dir / f"{input_file.stem}_temp_intermediate.pdf"
-        final_output_paths = []
-        job_failed = False
-        pdf_created_successfully = False # Flag to track if PDF step succeeded
-
         try:
-            # --- Step 1: Upload the source PPTX file ---
-            self.send_progress_update(f"Uploading {input_file.name}...")
-            source_asset_id = self._upload_asset(input_file)
-            self.send_progress_update(f"Upload complete. Asset ID: {source_asset_id}")
+            output_format = self.output_format.get()
+            self.send_progress_update(f"Converting {input_file.name} to {output_format.upper()}...")
 
-            # --- Step 2: Start the Create PDF job (Adobe API) ---
-            create_pdf_endpoint = "/operation/createpdf"
-            create_payload = {"assetID": source_asset_id}
-            create_status_url = self._start_job(create_pdf_endpoint, create_payload)
-            self.send_progress_update(f"Create PDF job started (Adobe API). Status URL: {create_status_url}")
+            # Ensure output directory exists
+            output_dir.mkdir(parents=True, exist_ok=True)
 
-            # --- Step 3: Poll for Create PDF job completion (Adobe API) ---
-            self.send_progress_update("Waiting for PDF creation (Adobe API) to complete...")
-            create_status_info = self._poll_job_status(create_status_url)
+            # Convert the file
+            result = convertapi.convert(
+                output_format,
+                {
+                    'File': str(input_file)
+                },
+                from_format='pptx'
+            )
 
-            # --- Step 4: Get PDF Download URI (Adobe API) ---
-            pdf_download_uri = create_status_info.get('asset', {}).get('downloadUri')
-            if not pdf_download_uri:
-                 raise ValueError("Adobe Create PDF job finished but no download URI found in the response.")
-
-            # --- Step 5: Download the PDF (from Adobe API result) ---
-            # Always download to the temporary path first
-            self.send_progress_update("Downloading generated PDF from Adobe API...")
-            self._download_asset(pdf_download_uri, temp_pdf_path)
-            if not temp_pdf_path.exists() or temp_pdf_path.stat().st_size == 0:
-                raise FileNotFoundError(f"PDF failed to download or is empty: {temp_pdf_path}")
-            pdf_created_successfully = True
-            self.send_progress_update("PDF downloaded successfully.")
-
-            # --- Step 6: Handle Final Output Format ---
-            if output_fmt == "pdf":
-                # Move the temporary PDF to the final location
-                output_pdf_path = output_dir / f"{input_file.stem}.pdf"
-                # Ensure the target directory exists
-                output_pdf_path.parent.mkdir(parents=True, exist_ok=True)
-                # Rename/move the downloaded temp file
-                temp_pdf_path.rename(output_pdf_path)
-                final_output_paths.append(output_pdf_path)
-                self.send_progress_update(f"Final PDF saved: {output_pdf_path.name}")
-                # temp_pdf_path no longer exists after rename, so cleanup won't try to delete it
-
-            else: # output_fmt == "png"
-                self.send_progress_update("Starting local PDF to PNG conversion using PyMuPDF...")
-                output_png_dir = output_dir / f"{input_file.stem}_slides"
-                output_png_dir.mkdir(parents=True, exist_ok=True)
-
-                doc = None # Initialize doc to None for finally block
-                try:
-                    doc = fitz.open(temp_pdf_path)
-                    num_pages = len(doc)
-                    if num_pages == 0:
-                        raise ValueError("Downloaded PDF has 0 pages.")
-                    self.send_progress_update(f"PDF has {num_pages} page(s). Starting PNG conversion...")
-
-                    for i, page in enumerate(doc):
-                        if self.stop_flag.is_set():
-                            raise InterruptedError("Conversion stopped by user.")
-
-                        page_num = i + 1
-                        self.send_progress_update(f"Converting page {page_num}/{num_pages}...")
-
-                        # Render page to a pixmap (image)
-                        # Increase zoom factor for higher resolution (DPI). zoom=2 is roughly 192 DPI.
-                        zoom = 2.0 # Adjust as needed (e.g., 1.5, 2.0, 3.0)
-                        mat = fitz.Matrix(zoom, zoom)
-                        pix = page.get_pixmap(matrix=mat, alpha=False) # alpha=False for standard PNG
-
-                        output_png_path = output_png_dir / f"{input_file.stem}_slide_{page_num}.png"
-                        pix.save(str(output_png_path)) # Save the pixmap as PNG
-                        final_output_paths.append(output_png_path)
-
-                    self.send_progress_update(f"Local PDF to PNG conversion complete. Saved {num_pages} slide(s).")
-
-                except Exception as fitz_error:
-                    # Catch errors specifically from the PyMuPDF part
-                    raise RuntimeError(f"PyMuPDF conversion failed: {fitz_error}") from fitz_error
-                finally:
-                    if doc:
-                        doc.close() # Ensure the PDF document is closed
-
-            # If we reach here without exceptions, processing was successful
-            self.send_progress_update(f"Successfully processed {input_file.name}.")
-
-        except (RuntimeError, ConnectionError, ValueError, TimeoutError, InterruptedError, FileNotFoundError, requests.exceptions.HTTPError) as e:
-            # Catch specific known errors (including HTTPError from Adobe API calls or PyMuPDF errors)
-            job_failed = True
-            error_message = f"ERROR converting {input_file.name}: {e}"
-            self.send_progress_update(error_message)
-            logging.error(f"Error converting {input_file.name}: {e}", exc_info=True) # Log full traceback for debugging
-        except Exception as e:
-            # Catch any other unexpected errors
-            job_failed = True
-            error_message = f"UNEXPECTED ERROR converting {input_file.name}: {e}"
-            self.send_progress_update(error_message)
-            logging.exception(f"Unexpected error converting {input_file.name}") # Log full traceback
-        finally:
-            # --- Cleanup ---
-            # Clean up intermediate PDF if it still exists
-            # (it won't exist if output was PDF and rename succeeded)
-            if temp_pdf_path.exists():
-                 try:
-                     temp_pdf_path.unlink()
-                     logging.info(f"Cleaned up intermediate file: {temp_pdf_path}")
-                 except OSError as e:
-                     # Log warning but don't stop execution
-                     self.send_progress_update(f"Warning: Could not delete intermediate PDF {temp_pdf_path}: {e}")
-                     logging.warning(f"Could not delete intermediate PDF {temp_pdf_path}: {e}")
-
-            # --- Final Status Logging ---
-            if not job_failed:
-                 logging.info(f"Finished processing {input_file.name}. Output(s): {[p.name for p in final_output_paths]}")
+            # Save the converted files
+            saved_files = result.save_files(str(output_dir))
+            
+            # For PNG output, rename files with sequential numbering
+            if output_format == 'png':
+                # Get list of files and sort them by creation time
+                saved_paths = [Path(f) for f in saved_files]
+                # Sort by creation time to maintain slide order
+                sorted_files = sorted(saved_paths, key=lambda x: x.stat().st_ctime)
+                
+                # Reverse the list to get correct slide order (first slide first)
+                # sorted_files.reverse()
+                
+                # Create new names with sequential numbering
+                for idx, old_path in enumerate(sorted_files):
+                    new_name = f"{input_file.stem}_{idx:02d}.png"  # Use 02d for 2-digit padding
+                    new_path = old_path.parent / new_name
+                    
+                    # Rename the file
+                    old_path.rename(new_path)
+                    self.send_progress_update(f"Saved slide {idx:02d}: {new_name}")
             else:
-                 logging.error(f"Failed processing {input_file.name}.")
+                # For PDF, just log the saved file
+                for saved_file in saved_files:
+                    self.send_progress_update(f"Successfully saved: {Path(saved_file).name}")
 
+            return True
+
+        except Exception as e:
+            error_msg = f"Failed to convert {input_file.name}: {str(e)}"
+            self.send_progress_update(f"ERROR: {error_msg}")
+            logging.error(error_msg, exc_info=True)
+            return False
 
 
     def after_processing(self):
         """Cleanup after processing batch."""
-        self.adobe_client_id = None
-        self.adobe_client_secret = None
-        self._access_token = None
-        self._token_expires_at = 0
-        self.send_progress_update("Adobe REST API conversion batch finished.")
-
-
-class TextToSpeechTool(ToolBase):
-    """
-    Converts text files (.txt) to MP3 audio using the ElevenLabs API.
-    Uses voice name from filename (format: some_name_voicename.txt).
-    """
-
-    def __init__(self, master, config_manager, progress_queue):
-        # Call the parent class initializer with the correct parameters
-        super().__init__(master, config_manager, progress_queue)
-        
-        # Set supported file extensions
-        self.supported_extensions = {'.txt'}
-        
-        # Constants for ElevenLabs API
-        self.ELEVENLABS_API_URL_BASE = "https://api.elevenlabs.io/v1"
-        self.TTS_ENDPOINT_TEMPLATE = "/text-to-speech/{voice_id}/stream"
-        self.VOICES_CONFIG_FILE = Path("elevenlabs_voices.json")
-        self.DEFAULT_MODEL = "eleven_multilingual_v2"
-        self.DEFAULT_VOICE_SETTINGS = {
-            "stability": 0.5,
-            "similarity_boost": 0.8,
-            "style": 0.0,
-            "use_speaker_boost": True
-        }
-        self.MAX_RETRIES = 3
-        self.RETRY_DELAY = 3  # seconds
-        
-        # Load voices configuration
-        self.voice_map = self._load_voices_config()
-        
-        # Get API key
-        self.api_key = self.config_manager.get_api_keys().get("elevenlabs")
-        if not self.api_key:
-            logging.warning("ElevenLabs API key not configured")
-
-    def _load_voices_config(self) -> dict:
-        """Loads the voice name to voice ID mapping from JSON config file."""
-        try:
-            with open(self.VOICES_CONFIG_FILE, 'r', encoding='utf-8') as f:
-                voices = json.load(f)
-                logging.info(f"Loaded {len(voices)} voice mappings from {self.VOICES_CONFIG_FILE}")
-                return voices
-        except FileNotFoundError:
-            logging.error(f"ElevenLabs voices config file not found at {self.VOICES_CONFIG_FILE}")
-            self.send_progress_update(f"ERROR: Voices config file missing: {self.VOICES_CONFIG_FILE}")
-            return {}
-        except json.JSONDecodeError as e:
-            logging.error(f"Error decoding JSON from {self.VOICES_CONFIG_FILE}: {e}")
-            self.send_progress_update(f"ERROR: Invalid JSON in voices config: {self.VOICES_CONFIG_FILE}")
-            return {}
-        except Exception as e:
-            logging.error(f"Unexpected error loading voices config: {e}", exc_info=True)
-            self.send_progress_update(f"ERROR: Failed to load voices config: {self.VOICES_CONFIG_FILE}")
-            return {}
-
-    def _parse_voicename(self, filename_stem: str) -> str | None:
-        """Extracts voice name from the filename stem (e.g., 'chapter1_Rachel' -> 'Rachel')."""
-        try:
-            if '_' not in filename_stem:
-                return None
-            return filename_stem.rsplit('_', 1)[1]
-        except IndexError:
-            return None
-
-    def before_processing(self):
-        """Pre-processing setup."""
-        if not self.api_key:
-            raise ValueError("ElevenLabs API key not configured. Please add your API key in the Configuration menu.")
-        
-        if not self.voice_map:
-            raise ValueError(f"Voice configuration missing or empty. Please check {self.VOICES_CONFIG_FILE}")
-
-    def process_file(self, input_file: Path, output_dir: Path):
-        """Processes a single text file for TTS conversion."""
-        try:
-            self.send_progress_update(f"Processing {input_file.name}...")
-            
-            # Check for interruption
-            if self.stop_flag.is_set():
-                raise InterruptedError("Processing stopped by user")
-            
-            # Determine output path
-            output_file = output_dir / f"{input_file.stem}.mp3"
-            
-            # Parse voice name
-            voicename = self._parse_voicename(input_file.stem)
-            if not voicename:
-                error_msg = f"Could not parse voice name from filename '{input_file.name}'. Expected format: name_voicename.txt"
-                self.send_progress_update(f"ERROR: {error_msg}")
-                logging.error(error_msg)
-                return
-            
-            # Look up voice ID
-            voice_id = self.voice_map.get(voicename)
-            if not voice_id:
-                error_msg = f"Voice name '{voicename}' not found in {self.VOICES_CONFIG_FILE}"
-                self.send_progress_update(f"ERROR: {error_msg}")
-                logging.error(error_msg)
-                return
-            
-            self.send_progress_update(f"Using voice: {voicename} (ID: {voice_id[:6]}...)")
-            
-            # Read text content
-            try:
-                text_to_speak = input_file.read_text(encoding='utf-8')
-                if not text_to_speak.strip():
-                    self.send_progress_update(f"Skipping {input_file.name}: File is empty")
-                    return
-            except Exception as e:
-                self.send_progress_update(f"ERROR: Failed to read {input_file.name}: {e}")
-                logging.error(f"Failed to read {input_file.name}: {e}", exc_info=True)
-                return
-            
-            # Generate audio
-            self._generate_audio(text_to_speak, voice_id, output_file)
-            
-            self.send_progress_update(f"Successfully generated audio: {output_file.name}")
-            
-        except InterruptedError:
-            raise
-        except Exception as e:
-            error_message = f"Error generating audio for {input_file.name}: {str(e)}"
-            self.send_progress_update(error_message)
-            logging.exception(error_message)
-
-    def _generate_audio(self, text: str, voice_id: str, output_file: Path) -> None:
-        """Generates audio using ElevenLabs API with retry mechanism."""
-        tts_url = f"{self.ELEVENLABS_API_URL_BASE}{self.TTS_ENDPOINT_TEMPLATE.format(voice_id=voice_id)}"
-        
-        headers = {
-            "Accept": "audio/mpeg",
-            "Content-Type": "application/json",
-            "xi-api-key": self.api_key
-        }
-        
-        payload = {
-            "text": text,
-            "model_id": self.DEFAULT_MODEL,
-            "voice_settings": self.DEFAULT_VOICE_SETTINGS
-        }
-        
-        for attempt in range(self.MAX_RETRIES):
-            # Check for interruption
-            if self.stop_flag.is_set():
-                raise InterruptedError("Processing stopped by user")
-            
-            try:
-                self.send_progress_update(f"Requesting audio generation (attempt {attempt + 1}/{self.MAX_RETRIES})...")
-                
-                response = requests.post(tts_url, headers=headers, json=payload, stream=True, timeout=180)
-                response.raise_for_status()
-                
-                # Save the audio stream
-                bytes_written = 0
-                output_file.parent.mkdir(parents=True, exist_ok=True)
-                
-                with open(output_file, "wb") as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if self.stop_flag.is_set():
-                            f.close()
-                            if output_file.exists():
-                                output_file.unlink()
-                            raise InterruptedError("Download stopped by user")
-                        
-                        if chunk:
-                            f.write(chunk)
-                            bytes_written += len(chunk)
-                
-                if bytes_written == 0:
-                    raise RuntimeError("Audio file was not saved correctly (0 bytes written)")
-                
-                return  # Success!
-                
-            except requests.exceptions.HTTPError as e:
-                status_code = e.response.status_code
-                try:
-                    error_details = e.response.json()
-                    error_message = error_details.get("detail", {}).get("message", str(e))
-                except:
-                    error_message = e.response.text or str(e)
-                
-                if status_code == 401:
-                    raise ValueError(f"Invalid ElevenLabs API key (Unauthorized): {error_message}")
-                elif status_code == 422:
-                    raise ValueError(f"Invalid request parameters: {error_message}")
-                elif status_code >= 500:
-                    self.send_progress_update(f"ElevenLabs server error: {error_message}. Retrying...")
-                else:
-                    raise ValueError(f"ElevenLabs API error ({status_code}): {error_message}")
-            
-            except (requests.exceptions.RequestException, RuntimeError) as e:
-                if attempt == self.MAX_RETRIES - 1:
-                    raise RuntimeError(f"Failed to generate audio after {self.MAX_RETRIES} attempts: {e}")
-                
-                self.send_progress_update(f"Network error: {e}. Retrying in {self.RETRY_DELAY} seconds...")
-                time.sleep(self.RETRY_DELAY)
-
+        convertapi.api_credentials = None
+        self.send_progress_update("ConvertAPI conversion batch finished.")
 
 
 
