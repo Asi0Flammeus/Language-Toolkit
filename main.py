@@ -7,6 +7,7 @@ import requests
 import time
 import mimetypes
 import os
+import re
 import subprocess
 import logging
 from pathlib import Path
@@ -20,6 +21,7 @@ import fitz
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.dml import MSO_THEME_COLOR, MSO_COLOR_TYPE
+
 
 # --- Constants ---
 SUPPORTED_LANGUAGES_FILE = "supported_languages.json"
@@ -1268,6 +1270,325 @@ class PPTXtoPDFTool(ToolBase):
         convertapi.api_credentials = None
         self.send_progress_update("ConvertAPI conversion batch finished.")
 
+class VideoMergeTool(ToolBase):
+    """
+    Merges MP3 audio files with PNG images to create MP4 videos.
+    Uses ffmpeg directly instead of moviepy for better reliability.
+    
+    Matches files based on 2-digit number patterns in filenames,
+    where digits are separated by underscore or hyphen.
+    Adds a 0.5s silence between clips in the final video.
+    """
+
+    def __init__(self, master, config_manager, progress_queue):
+        super().__init__(master, config_manager, progress_queue)
+        # We don't use self.supported_extensions in the usual way
+        self.supported_extensions = {'.mp3', '.png'}
+        
+        # Force selection mode to folder only
+        self.selection_mode = tk.StringVar(value="folder")
+        
+        # Check dependencies
+        self._check_dependencies()
+
+    def _check_dependencies(self):
+        """Check if ffmpeg is installed and available."""
+        self.dependencies_met = False
+        try:
+            # Check if ffmpeg is available in PATH
+            result = subprocess.run(['ffmpeg', '-version'], 
+                                   stdout=subprocess.PIPE, 
+                                   stderr=subprocess.PIPE, 
+                                   text=True)
+            if result.returncode == 0:
+                self.dependencies_met = True
+                version_info = result.stdout.split('\n')[0]
+                logging.info(f"Found ffmpeg: {version_info}")
+            else:
+                logging.error("ffmpeg command returned non-zero exit code")
+                self.send_progress_update("ERROR: ffmpeg command failed")
+        except FileNotFoundError:
+            error_msg = "ffmpeg not found in PATH. Please install ffmpeg first."
+            logging.error(error_msg)
+            self.send_progress_update(f"ERROR: {error_msg}")
+        except Exception as e:
+            logging.error(f"Error checking ffmpeg: {str(e)}")
+            self.send_progress_update(f"ERROR: Failed to check ffmpeg: {str(e)}")
+            
+    def create_selection_mode_controls(self, parent_frame):
+        """Override to only show folder selection mode."""
+        mode_frame = ttk.LabelFrame(parent_frame, text="Input Mode")
+        mode_frame.pack(fill='x', padx=5, pady=5)
+        
+        ttk.Label(mode_frame, text="This tool accepts folders containing matching MP3 and PNG files").pack(padx=10, pady=5)
+        note_frame = ttk.Frame(mode_frame)
+        note_frame.pack(fill='x', padx=10, pady=5)
+        ttk.Label(note_frame, text="Note: Files are matched by the same 2-digit number in their names").pack(side=tk.LEFT)
+        
+    def select_input_paths(self):
+        """Override to only allow folder selection."""
+        path = filedialog.askdirectory(title="Select Folder with MP3 and PNG Files")
+        if path:
+            self.input_paths = [Path(path)]
+            self.update_input_display()
+            return True
+        return False
+            
+    def before_processing(self):
+        """Pre-processing setup and validation."""
+        if not self.dependencies_met:
+            self._check_dependencies()  # Check again in case user installed ffmpeg
+            if not self.dependencies_met:
+                raise ImportError("ffmpeg not found. Please install ffmpeg and make sure it's in your PATH.")
+
+    def process_file(self, input_file, output_dir):
+        """Not used for this tool - we process directories instead."""
+        pass
+
+    def _process_paths_threaded(self):
+        """Override to implement directory-based processing instead of file-based."""
+        try:
+            self.before_processing()
+            
+            if not self.input_paths:
+                self.send_progress_update("No input directory selected.")
+                return
+                
+            input_dir = self.input_paths[0]
+            if not input_dir.is_dir():
+                self.send_progress_update(f"Error: {input_dir} is not a directory.")
+                return
+                
+            # Create output directory if it doesn't exist
+            output_dir = self.output_path
+            output_dir.mkdir(parents=True, exist_ok=True)
+                
+            # Process the directory
+            self.process_directory(input_dir, output_dir)
+                
+            self.after_processing()
+            
+        except Exception as e:
+            error_msg = f"Error during processing: {str(e)}"
+            self.send_progress_update(error_msg)
+            logging.exception(error_msg)
+        finally:
+            self.stop_flag.clear()
+            self.processing_thread = None
+            self.send_progress_update("Processing complete")
+            
+    def process_directory(self, input_dir, output_dir):
+        """Finds matching MP3/PNG pairs and creates MP4 videos."""
+        self.send_progress_update(f"Scanning directory: {input_dir}")
+        
+        # Find all MP3 and PNG files in the directory
+        mp3_files = sorted(list(input_dir.glob('**/*.mp3')))  # Include subdirectories
+        png_files = sorted(list(input_dir.glob('**/*.png')))
+        
+        self.send_progress_update(f"Found {len(mp3_files)} MP3 files and {len(png_files)} PNG files")
+        
+        # Map files by their numeric identifiers
+        file_pairs = self.match_file_pairs(mp3_files, png_files)
+        
+        if not file_pairs:
+            self.send_progress_update("No matching MP3/PNG pairs found.")
+            return
+            
+        self.send_progress_update(f"Found {len(file_pairs)} matching MP3/PNG pairs")
+        
+        # Create the output video
+        output_file = output_dir / f"{input_dir.name}_merged.mp4"
+        self.create_video_with_ffmpeg(file_pairs, output_file)
+        
+    def match_file_pairs(self, mp3_files, png_files):
+        """
+        Match MP3 and PNG files based on numeric identifiers in their names.
+        Specifically designed for the file naming format shown in the examples.
+        """
+        file_pairs = []
+        
+        # Create dictionaries of files keyed by their numeric IDs
+        mp3_dict = {}
+        png_dict = {}
+        
+        # Process PNG files (format like: cyp201_2.2_en-US_00.png)
+        for png_file in png_files:
+            # Look for the two digits before .png
+            match = re.search(r'_(\d{2})\.png$', png_file.name)
+            if match:
+                digit = match.group(1)
+                self.send_progress_update(f"PNG match: {digit} in {png_file.name}")
+                png_dict[digit] = png_file
+            else:
+                # Try alternative pattern
+                match = re.search(r'(\d{2})(?:_|-)(?:en-US|transcript)', png_file.stem)
+                if match:
+                    digit = match.group(1)
+                    self.send_progress_update(f"PNG alt match: {digit} in {png_file.name}")
+                    png_dict[digit] = png_file
+        
+        # Process MP3 files (format like: Loic_cyp201-v002-2.2-00_en-US.mp3)
+        for mp3_file in mp3_files:
+            # First try to match digits followed by _en-US or -en-US
+            match = re.search(r'[-_](\d{2})(?:_|-)(en-US|transcript)', mp3_file.stem)
+            if match:
+                digit = match.group(1)
+                self.send_progress_update(f"MP3 match: {digit} in {mp3_file.name}")
+                mp3_dict[digit] = mp3_file
+            else:
+                # Try alternative pattern
+                match = re.search(r'[-_](\d{2})\.mp3$', mp3_file.name)
+                if match:
+                    digit = match.group(1)
+                    self.send_progress_update(f"MP3 alt match: {digit} in {mp3_file.name}")
+                    mp3_dict[digit] = mp3_file
+        
+        # Debug output
+        self.send_progress_update(f"Extracted identifiers: {len(mp3_dict)} from MP3 files, {len(png_dict)} from PNG files")
+        self.send_progress_update(f"MP3 IDs: {sorted(list(mp3_dict.keys()))}")
+        self.send_progress_update(f"PNG IDs: {sorted(list(png_dict.keys()))}")
+        
+        # Find matching pairs
+        for numeric_id in sorted(mp3_dict.keys()):
+            if numeric_id in png_dict:
+                mp3_file = mp3_dict[numeric_id]
+                png_file = png_dict[numeric_id]
+                self.send_progress_update(f"Matched: {numeric_id} → {mp3_file.name} with {png_file.name}")
+                file_pairs.append((numeric_id, mp3_file, png_file))
+            else:
+                self.send_progress_update(f"No matching PNG file for MP3 with ID {numeric_id}")
+        
+        # Sort by numeric id
+        return sorted(file_pairs, key=lambda x: x[0])
+
+    
+    def create_video_with_ffmpeg(self, file_pairs, output_file):
+        """
+        Create a video from matched MP3/PNG pairs using ffmpeg directly.
+        Handles adding silence between clips.
+        """
+        try:
+            # Create a temporary directory for intermediate files
+            temp_dir = output_file.parent / "temp_video_files"
+            temp_dir.mkdir(exist_ok=True)
+            
+            # List to store paths to intermediate segment files
+            segment_files = []
+            
+            # Process each pair and create individual video segments
+            for idx, (numeric_id, mp3_file, png_file) in enumerate(file_pairs):
+                if self.stop_flag.is_set():
+                    self.send_progress_update("Processing stopped by user")
+                    return
+                
+                self.send_progress_update(f"Processing pair {idx+1}/{len(file_pairs)}: {numeric_id}")
+                
+                # Create segment file path
+                segment_file = temp_dir / f"segment_{idx:03d}.mp4"
+                segment_files.append(segment_file)
+                
+                # Run ffmpeg to create a video segment from image and audio
+                cmd = [
+                    'ffmpeg', '-y',
+                    '-loop', '1',
+                    '-i', str(png_file),
+                    '-i', str(mp3_file),
+                    '-c:v', 'libx264',
+                    '-tune', 'stillimage',
+                    '-c:a', 'aac',
+                    '-b:a', '192k',
+                    '-pix_fmt', 'yuv420p',
+                    '-shortest',
+                    str(segment_file)
+                ]
+                
+                self.send_progress_update(f"Creating segment for pair {idx+1}...")
+                
+                result = subprocess.run(
+                    cmd, 
+                    stdout=subprocess.PIPE, 
+                    stderr=subprocess.PIPE, 
+                    text=True
+                )
+                
+                if result.returncode != 0:
+                    self.send_progress_update(f"Error creating segment {idx+1}: {result.stderr}")
+                    raise RuntimeError(f"ffmpeg error: {result.stderr}")
+                
+                # Add silence with the same image if not the last segment
+                if idx < len(file_pairs) - 1:
+                    silence_file = temp_dir / f"silence_{idx:03d}.mp4"
+                    segment_files.append(silence_file)
+                    
+                    # Create 0.5 second silence with the same image
+                    silence_cmd = [
+                        'ffmpeg', '-y',
+                        '-loop', '1',
+                        '-i', str(png_file),
+                        '-f', 'lavfi', 
+                        '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
+                        '-c:v', 'libx264',
+                        '-t', '0.5',  # 0.5 seconds
+                        '-c:a', 'aac',
+                        '-pix_fmt', 'yuv420p',
+                        str(silence_file)
+                    ]
+                    
+                    self.send_progress_update(f"Adding silence after segment {idx+1}...")
+                    
+                    silence_result = subprocess.run(
+                        silence_cmd, 
+                        stdout=subprocess.PIPE, 
+                        stderr=subprocess.PIPE, 
+                        text=True
+                    )
+                    
+                    if silence_result.returncode != 0:
+                        self.send_progress_update(f"Error creating silence {idx+1}: {silence_result.stderr}")
+                        raise RuntimeError(f"ffmpeg error: {silence_result.stderr}")
+            
+            # Create a file list for concatenation
+            concat_file = temp_dir / "concat_list.txt"
+            with open(concat_file, 'w') as f:
+                for segment in segment_files:
+                    f.write(f"file '{segment.absolute()}'\n")
+            
+            # Concatenate all segments into final video
+            self.send_progress_update("Concatenating all segments...")
+            
+            concat_cmd = [
+                'ffmpeg', '-y',
+                '-f', 'concat',
+                '-safe', '0',
+                '-i', str(concat_file),
+                '-c', 'copy',
+                str(output_file)
+            ]
+            
+            concat_result = subprocess.run(
+                concat_cmd, 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.PIPE, 
+                text=True
+            )
+            
+            if concat_result.returncode != 0:
+                self.send_progress_update(f"Error concatenating: {concat_result.stderr}")
+                raise RuntimeError(f"ffmpeg error: {concat_result.stderr}")
+            
+            self.send_progress_update(f"Successfully created video: {output_file}")
+            
+            # Clean up temporary files
+            self.send_progress_update("Cleaning up temporary files...")
+            for file in segment_files:
+                file.unlink(missing_ok=True)
+            concat_file.unlink(missing_ok=True)
+            temp_dir.rmdir()
+            
+        except Exception as e:
+            error_msg = f"Error creating video: {str(e)}"
+            self.send_progress_update(error_msg)
+            logging.exception(error_msg)
 
 
 
@@ -1307,6 +1628,7 @@ class MainApp(TkinterDnD.Tk):
         self.text_translation_tool = self.create_tool_tab("Text Translation", TextTranslationTool)
         self.pptx_to_pdf_tool = self.create_tool_tab("PPTX to PDF/PNG", PPTXtoPDFTool)
         self.text_to_speech_tool = self.create_tool_tab("Text to Speech", TextToSpeechTool)  
+        self.video_merge_tool = self.create_tool_tab("Video Merge", VideoMergeTool)
 
 
 
