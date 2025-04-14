@@ -1396,9 +1396,41 @@ class VideoMergeTool(ToolBase):
             
         self.send_progress_update(f"Found {len(file_pairs)} matching MP3/PNG pairs")
         
+        # Sort file pairs by numeric ID to ensure proper order
+        file_pairs.sort(key=lambda x: x[0])
+        
+        # Generate output filename based on the first MP3 file but without the 2-digit identifier
+        if file_pairs:
+            # Get the first MP3 file's path
+            _, first_mp3, _ = file_pairs[0]
+            
+            # Extract the base name without the 2-digit identifier
+            # For names like "Loic_cyp201-v002-2.2-00_en-US.mp3"
+            
+            # First, get the stem (filename without extension)
+            mp3_stem = first_mp3.stem
+            
+            # Pattern to match the identifier we want to remove (e.g., -00_ or _00_)
+            identifier_pattern = r'[_-](\d{2})(?:[_-])'
+            
+            # Remove the identifier from the name
+            output_name = re.sub(identifier_pattern, '_', mp3_stem)
+            
+            # If the identifier is at the end (like "name-00")
+            end_pattern = r'[_-]\d{2}$'
+            output_name = re.sub(end_pattern, '', output_name)
+            
+            # Create the final output path
+            output_file = output_dir / f"{output_name}.mp4"
+        else:
+            # Fallback name if something goes wrong
+            output_file = output_dir / f"{input_dir.name}_merged.mp4"
+        
+        self.send_progress_update(f"Output file will be: {output_file}")
+        
         # Create the output video
-        output_file = output_dir / f"{input_dir.name}_merged.mp4"
         self.create_video_with_ffmpeg(file_pairs, output_file)
+
         
     def match_file_pairs(self, mp3_files, png_files):
         """
