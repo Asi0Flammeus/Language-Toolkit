@@ -34,8 +34,9 @@ class ConfigManager:
     """Manages configuration files for the application."""
 
     def __init__(self, languages_file=SUPPORTED_LANGUAGES_FILE, api_keys_file=API_KEYS_FILE):
-        self.languages_file = Path(languages_file)
-        self.api_keys_file = Path(api_keys_file)
+        self.base_path = Path(__file__).resolve().parent
+        self.languages_file = self.base_path / languages_file
+        self.api_keys_file = self.base_path / api_keys_file
 
         self.languages = self.load_json(self.languages_file)
         self.api_keys = self.load_json(self.api_keys_file)
