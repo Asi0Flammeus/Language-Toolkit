@@ -1526,6 +1526,7 @@ class VideoMergeTool(ToolBase):
                     '-loop', '1',
                     '-i', str(png_file),
                     '-i', str(mp3_file),
+                    '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2',
                     '-c:v', 'libx264',
                     '-tune', 'stillimage',
                     '-c:a', 'aac',
@@ -1560,8 +1561,9 @@ class VideoMergeTool(ToolBase):
                         '-i', str(png_file),
                         '-f', 'lavfi', 
                         '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
+                        '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2',
                         '-c:v', 'libx264',
-                        '-t', '0.5',  # 0.5 seconds
+                        '-t', '0.2',  # 0.5 seconds
                         '-c:a', 'aac',
                         '-pix_fmt', 'yuv420p',
                         str(silence_file)
