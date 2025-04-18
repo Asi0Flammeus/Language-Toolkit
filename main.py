@@ -1288,6 +1288,8 @@ class VideoMergeTool(ToolBase):
         
         # Force selection mode to folder only
         self.selection_mode = tk.StringVar(value="folder")
+        # Toggle for recursive batch mode (process subfolders)
+        self.recursive_mode = tk.BooleanVar(value=False)
         
         # Check dependencies
         self._check_dependencies()
@@ -1325,6 +1327,10 @@ class VideoMergeTool(ToolBase):
         note_frame = ttk.Frame(mode_frame)
         note_frame.pack(fill='x', padx=10, pady=5)
         ttk.Label(note_frame, text="Note: Files are matched by the same 2-digit number in their names").pack(side=tk.LEFT)
+        # Recursive batch mode toggle: when enabled, each subfolder is processed separately
+        ttk.Checkbutton(mode_frame,
+                        text="Recursive batch mode (process subfolders)",
+                        variable=self.recursive_mode).pack(anchor='w', padx=10, pady=5)
         
     def select_input_paths(self):
         """Override to only allow folder selection."""
@@ -1379,58 +1385,69 @@ class VideoMergeTool(ToolBase):
             self.send_progress_update("Processing complete")
             
     def process_directory(self, input_dir, output_dir):
-        """Finds matching MP3/PNG pairs and creates MP4 videos."""
-        self.send_progress_update(f"Scanning directory: {input_dir}")
-        
-        # Find all MP3 and PNG files in the directory
-        mp3_files = sorted(list(input_dir.glob('**/*.mp3')))  # Include subdirectories
-        png_files = sorted(list(input_dir.glob('**/*.png')))
-        
-        self.send_progress_update(f"Found {len(mp3_files)} MP3 files and {len(png_files)} PNG files")
-        
-        # Map files by their numeric identifiers
-        file_pairs = self.match_file_pairs(mp3_files, png_files)
-        
-        if not file_pairs:
-            self.send_progress_update("No matching MP3/PNG pairs found.")
-            return
-            
-        self.send_progress_update(f"Found {len(file_pairs)} matching MP3/PNG pairs")
-        
-        # Sort file pairs by numeric ID to ensure proper order
-        file_pairs.sort(key=lambda x: x[0])
-        
-        # Generate output filename based on the first MP3 file but without the 2-digit identifier
-        if file_pairs:
-            # Get the first MP3 file's path
+        """Processes MP3/PNG pairs in either single-folder or recursive mode to create MP4 videos."""
+        # Determine mode: flat (single folder) or recursive per subfolder
+        if not getattr(self, 'recursive_mode', None) or not self.recursive_mode.get():
+            self.send_progress_update(f"Processing single-folder mode: {input_dir}")
+            # Collect MP3 and PNG files directly in the selected folder
+            try:
+                entries = os.listdir(input_dir)
+            except Exception as e:
+                self.send_progress_update(f"Error reading directory {input_dir}: {e}")
+                return
+            mp3_files = sorted([input_dir / f for f in entries if f.lower().endswith('.mp3')])
+            png_files = sorted([input_dir / f for f in entries if f.lower().endswith('.png')])
+            self.send_progress_update(f"Found {len(mp3_files)} MP3 and {len(png_files)} PNG in {input_dir}")
+            # Match files by identifier
+            file_pairs = self.match_file_pairs(mp3_files, png_files)
+            if not file_pairs:
+                self.send_progress_update(f"No matching MP3/PNG pairs found in {input_dir}")
+                return
+            self.send_progress_update(f"Found {len(file_pairs)} matching pairs in {input_dir}")
+            # Sort file pairs by numeric ID
+            file_pairs.sort(key=lambda x: x[0])
+            # Generate output filename based on the first MP3 file (remove 2-digit identifier)
             _, first_mp3, _ = file_pairs[0]
-            
-            # Extract the base name without the 2-digit identifier
-            # For names like "Loic_cyp201-v002-2.2-00_en-US.mp3"
-            
-            # First, get the stem (filename without extension)
             mp3_stem = first_mp3.stem
-            
-            # Pattern to match the identifier we want to remove (e.g., -00_ or _00_)
             identifier_pattern = r'[_-](\d{2})(?:[_-])'
-            
-            # Remove the identifier from the name
             output_name = re.sub(identifier_pattern, '_', mp3_stem)
-            
-            # If the identifier is at the end (like "name-00")
             end_pattern = r'[_-]\d{2}$'
             output_name = re.sub(end_pattern, '', output_name)
-            
-            # Create the final output path
+            # Ensure output directory exists
+            output_dir.mkdir(parents=True, exist_ok=True)
             output_file = output_dir / f"{output_name}.mp4"
-        else:
-            # Fallback name if something goes wrong
-            output_file = output_dir / f"{input_dir.name}_merged.mp4"
-        
-        self.send_progress_update(f"Output file will be: {output_file}")
-        
-        # Create the output video
-        self.create_video_with_ffmpeg(file_pairs, output_file)
+            self.send_progress_update(f"Output file will be: {output_file}")
+            self.create_video_with_ffmpeg(file_pairs, output_file)
+            return
+        # Recursive mode: walk through all subdirectories
+        self.send_progress_update(f"Scanning directory recursively: {input_dir}")
+        for dirpath, dirnames, filenames in os.walk(input_dir):
+            curr_dir = Path(dirpath)
+            # Collect MP3 and PNG files in the current directory
+            mp3_files = sorted([curr_dir / f for f in filenames if f.lower().endswith('.mp3')])
+            png_files = sorted([curr_dir / f for f in filenames if f.lower().endswith('.png')])
+            if not mp3_files or not png_files:
+                continue
+            self.send_progress_update(f"Found {len(mp3_files)} MP3 and {len(png_files)} PNG in {curr_dir}")
+            # Match files by identifier
+            file_pairs = self.match_file_pairs(mp3_files, png_files)
+            if not file_pairs:
+                self.send_progress_update(f"No matching MP3/PNG pairs found in {curr_dir}")
+                continue
+            self.send_progress_update(f"Found {len(file_pairs)} matching pairs in {curr_dir}")
+            # Sort file pairs by numeric ID
+            file_pairs.sort(key=lambda x: x[0])
+            # Generate output filename based on the first MP3 file (remove 2-digit identifier)
+            _, first_mp3, _ = file_pairs[0]
+            mp3_stem = first_mp3.stem
+            identifier_pattern = r'[_-](\d{2})(?:[_-])'
+            output_name = re.sub(identifier_pattern, '_', mp3_stem)
+            end_pattern = r'[_-]\d{2}$'
+            output_name = re.sub(end_pattern, '', output_name)
+            output_file = curr_dir / f"{output_name}.mp4"
+            self.send_progress_update(f"Output file will be: {output_file}")
+            # Create the output video
+            self.create_video_with_ffmpeg(file_pairs, output_file)
 
         
     def match_file_pairs(self, mp3_files, png_files):
