@@ -1452,64 +1452,45 @@ class VideoMergeTool(ToolBase):
         
     def match_file_pairs(self, mp3_files, png_files):
         """
-        Match MP3 and PNG files based on numeric identifiers in their names.
-        Specifically designed for the file naming format shown in the examples.
+        Match MP3 and PNG files based on a generic two-digit index in their filenames.
+        The index is defined as exactly two digits not part of a larger digit sequence
+        and can be surrounded by any non-digit character (e.g., '_01_', '-01-', '.01.').
         """
         file_pairs = []
-        
-        # Create dictionaries of files keyed by their numeric IDs
         mp3_dict = {}
         png_dict = {}
-        
-        # Process PNG files (format like: cyp201_2.2_en-US_00.png)
+
+        # Compile a regex to match exactly two digits not adjacent to other digits
+        id_pattern = re.compile(r'(?<!\d)(\d{2})(?!\d)')
+
+        # Extract indices for PNG files
         for png_file in png_files:
-            # Look for the two digits before .png
-            match = re.search(r'_(\d{2})\.png$', png_file.name)
+            match = id_pattern.search(png_file.name)
             if match:
-                digit = match.group(1)
-                self.send_progress_update(f"PNG match: {digit} in {png_file.name}")
-                png_dict[digit] = png_file
-            else:
-                # Try alternative pattern
-                match = re.search(r'(\d{2})(?:_|-)(?:en-US|transcript)', png_file.stem)
-                if match:
-                    digit = match.group(1)
-                    self.send_progress_update(f"PNG alt match: {digit} in {png_file.name}")
-                    png_dict[digit] = png_file
-        
-        # Process MP3 files (format like: Loic_cyp201-v002-2.2-00_en-US.mp3)
+                idx = match.group(1)
+                self.send_progress_update(f"PNG found index {idx} in {png_file.name}")
+                png_dict[idx] = png_file
+
+        # Extract indices for MP3 files
         for mp3_file in mp3_files:
-            # First try to match digits followed by _en-US or -en-US
-            match = re.search(r'[-_](\d{2})(?:_|-)(en-US|transcript)', mp3_file.stem)
+            match = id_pattern.search(mp3_file.name)
             if match:
-                digit = match.group(1)
-                self.send_progress_update(f"MP3 match: {digit} in {mp3_file.name}")
-                mp3_dict[digit] = mp3_file
+                idx = match.group(1)
+                self.send_progress_update(f"MP3 found index {idx} in {mp3_file.name}")
+                mp3_dict[idx] = mp3_file
+
+        # Match pairs by index
+        for idx in sorted(mp3_dict.keys(), key=lambda x: int(x)):
+            mp3_file = mp3_dict[idx]
+            png_file = png_dict.get(idx)
+            if png_file:
+                self.send_progress_update(f"Matched index {idx}: {mp3_file.name} + {png_file.name}")
+                file_pairs.append((idx, mp3_file, png_file))
             else:
-                # Try alternative pattern
-                match = re.search(r'[-_](\d{2})\.mp3$', mp3_file.name)
-                if match:
-                    digit = match.group(1)
-                    self.send_progress_update(f"MP3 alt match: {digit} in {mp3_file.name}")
-                    mp3_dict[digit] = mp3_file
-        
-        # Debug output
-        self.send_progress_update(f"Extracted identifiers: {len(mp3_dict)} from MP3 files, {len(png_dict)} from PNG files")
-        self.send_progress_update(f"MP3 IDs: {sorted(list(mp3_dict.keys()))}")
-        self.send_progress_update(f"PNG IDs: {sorted(list(png_dict.keys()))}")
-        
-        # Find matching pairs
-        for numeric_id in sorted(mp3_dict.keys()):
-            if numeric_id in png_dict:
-                mp3_file = mp3_dict[numeric_id]
-                png_file = png_dict[numeric_id]
-                self.send_progress_update(f"Matched: {numeric_id} → {mp3_file.name} with {png_file.name}")
-                file_pairs.append((numeric_id, mp3_file, png_file))
-            else:
-                self.send_progress_update(f"No matching PNG file for MP3 with ID {numeric_id}")
-        
-        # Sort by numeric id
-        return sorted(file_pairs, key=lambda x: x[0])
+                self.send_progress_update(f"No PNG match for MP3 index {idx}: {mp3_file.name}")
+
+        # Return pairs sorted by numeric index
+        return sorted(file_pairs, key=lambda x: int(x[0]))
 
     
     def create_video_with_ffmpeg(self, file_pairs, output_file):
