@@ -1644,6 +1644,208 @@ class VideoMergeTool(ToolBase):
 
 
 
+class SequentialProcessingTool(ToolBase, LanguageSelectionMixin):
+    """
+    Sequentially applies multiple tools in recursive mode:
+    1. PPTX translation
+    2. PPTX export to PNG
+    3. Text translation
+    4. Audio generation
+    5. Video generation
+    """
+
+    def __init__(self, master, config_manager, progress_queue):
+        super().__init__(master, config_manager, progress_queue)
+        self.supported_extensions = {'.pptx'}
+        
+        # Single set of language selection variables
+        self.source_lang = tk.StringVar(value="en")
+        self.target_lang = tk.StringVar(value="fr")
+        
+        # Force selection mode to folder
+        self.selection_mode = tk.StringVar(value="folder")
+        
+        # Initialize sub-tools
+        self.pptx_translation_tool = PPTXTranslationTool(master, config_manager, progress_queue)
+        self.pptx_export_tool = PPTXtoPDFTool(master, config_manager, progress_queue)
+        self.text_translation_tool = TextTranslationTool(master, config_manager, progress_queue)
+        self.text_to_speech_tool = TextToSpeechTool(master, config_manager, progress_queue)
+        self.video_merge_tool = VideoMergeTool(master, config_manager, progress_queue)
+
+    def process_file(self, input_file: Path, output_dir: Path):
+        """Processes a single PPTX file through all tools sequentially."""
+        try:
+            self.send_progress_update(f"Starting sequential processing for {input_file}")
+            
+            # Create temporary directories for intermediate files
+            temp_dir = output_dir / "temp_processing"
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 1. PPTX Translation
+            self.send_progress_update("Step 1: PPTX Translation")
+            translated_pptx = self.pptx_translation_tool.translate_pptx(
+                input_file, 
+                self.source_lang.get(),
+                self.target_lang.get(),
+                temp_dir
+            )
+            
+            # 2. PPTX Export to PNG
+            self.send_progress_update("Step 2: PPTX Export to PNG")
+            self.pptx_export_tool.output_format.set("png")
+            self.pptx_export_tool.process_file(translated_pptx, temp_dir)
+            
+            # 3. Text Translation (process all txt files)
+            self.send_progress_update("Step 3: Text Translation")
+            self.text_translation_tool.source_lang.set(self.source_lang.get())
+            self.text_translation_tool.target_lang.set(self.target_lang.get())
+            for txt_file in temp_dir.glob("*.txt"):
+                self.text_translation_tool.process_file(txt_file, temp_dir)
+            
+            # 4. Audio Generation
+            self.send_progress_update("Step 4: Audio Generation")
+            for txt_file in temp_dir.glob(f"*_{self.target_lang.get()}.txt"):
+                self.text_to_speech_tool.process_file(txt_file, temp_dir)
+            
+            # 5. Video Generation
+            self.send_progress_update("Step 5: Video Generation")
+            self.video_merge_tool.process_directory(temp_dir, output_dir)
+            
+            # Cleanup temporary files
+            self.send_progress_update("Cleaning up temporary files...")
+            for file in temp_dir.glob("*"):
+                file.unlink()
+            temp_dir.rmdir()
+            
+            self.send_progress_update(f"Sequential processing complete for {input_file}")
+            
+        except Exception as e:
+            error_msg = f"Error in sequential processing: {str(e)}"
+            self.send_progress_update(error_msg)
+            logging.exception(error_msg)
+
+    def before_processing(self):
+        """Validate settings before processing."""
+        if not all([self.source_lang.get(), self.target_lang.get()]):
+            raise ValueError("Please select source and target languages")
+        
+        # Validate API keys
+        api_keys = self.config_manager.get_api_keys()
+        required_keys = {
+            "deepl": "DeepL API key for translation",
+            "convertapi": "ConvertAPI key for PPTX export",
+            "elevenlabs": "ElevenLabs API key for audio generation"
+        }
+        
+        missing_keys = [name for name, desc in required_keys.items() 
+                       if not api_keys.get(name)]
+        
+        if missing_keys:
+            raise ValueError("Missing required API keys:\n" + 
+                           "\n".join(f"- {required_keys[key]}" for key in missing_keys))
+
+class SequentialProcessingTool(ToolBase, LanguageSelectionMixin):
+    """
+    Sequentially applies multiple tools in recursive mode:
+    1. PPTX translation
+    2. PPTX export to PNG
+    3. Text translation
+    4. Audio generation
+    5. Video generation
+    """
+
+    def __init__(self, master, config_manager, progress_queue):
+        super().__init__(master, config_manager, progress_queue)
+        self.supported_extensions = {'.pptx'}
+        
+        # Single set of language selection variables
+        self.source_lang = tk.StringVar(value="en")
+        self.target_lang = tk.StringVar(value="fr")
+        
+        # Force selection mode to folder
+        self.selection_mode = tk.StringVar(value="folder")
+        
+        # Initialize sub-tools
+        self.pptx_translation_tool = PPTXTranslationTool(master, config_manager, progress_queue)
+        self.pptx_export_tool = PPTXtoPDFTool(master, config_manager, progress_queue)
+        self.text_translation_tool = TextTranslationTool(master, config_manager, progress_queue)
+        self.text_to_speech_tool = TextToSpeechTool(master, config_manager, progress_queue)
+        self.video_merge_tool = VideoMergeTool(master, config_manager, progress_queue)
+
+    def process_file(self, input_file: Path, output_dir: Path):
+        """Processes a single PPTX file through all tools sequentially."""
+        try:
+            self.send_progress_update(f"Starting sequential processing for {input_file}")
+            
+            # Create temporary directories for intermediate files
+            temp_dir = output_dir / "temp_processing"
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 1. PPTX Translation
+            self.send_progress_update("Step 1: PPTX Translation")
+            translated_pptx = self.pptx_translation_tool.translate_pptx(
+                input_file, 
+                self.source_lang.get(),
+                self.target_lang.get(),
+                temp_dir
+            )
+            
+            # 2. PPTX Export to PNG
+            self.send_progress_update("Step 2: PPTX Export to PNG")
+            self.pptx_export_tool.output_format.set("png")
+            self.pptx_export_tool.process_file(translated_pptx, temp_dir)
+            
+            # 3. Text Translation (process all txt files)
+            self.send_progress_update("Step 3: Text Translation")
+            self.text_translation_tool.source_lang.set(self.source_lang.get())
+            self.text_translation_tool.target_lang.set(self.target_lang.get())
+            for txt_file in temp_dir.glob("*.txt"):
+                self.text_translation_tool.process_file(txt_file, temp_dir)
+            
+            # 4. Audio Generation
+            self.send_progress_update("Step 4: Audio Generation")
+            for txt_file in temp_dir.glob(f"*_{self.target_lang.get()}.txt"):
+                self.text_to_speech_tool.process_file(txt_file, temp_dir)
+            
+            # 5. Video Generation
+            self.send_progress_update("Step 5: Video Generation")
+            self.video_merge_tool.process_directory(temp_dir, output_dir)
+            
+            # Cleanup temporary files
+            self.send_progress_update("Cleaning up temporary files...")
+            for file in temp_dir.glob("*"):
+                file.unlink()
+            temp_dir.rmdir()
+            
+            self.send_progress_update(f"Sequential processing complete for {input_file}")
+            
+        except Exception as e:
+            error_msg = f"Error in sequential processing: {str(e)}"
+            self.send_progress_update(error_msg)
+            logging.exception(error_msg)
+
+    def before_processing(self):
+        """Validate settings before processing."""
+        if not all([self.source_lang.get(), self.target_lang.get()]):
+            raise ValueError("Please select source and target languages")
+        
+        # Validate API keys
+        api_keys = self.config_manager.get_api_keys()
+        required_keys = {
+            "deepl": "DeepL API key for translation",
+            "convertapi": "ConvertAPI key for PPTX export",
+            "elevenlabs": "ElevenLabs API key for audio generation"
+        }
+        
+        missing_keys = [name for name, desc in required_keys.items() 
+                       if not api_keys.get(name)]
+        
+        if missing_keys:
+            raise ValueError("Missing required API keys:\n" + 
+                           "\n".join(f"- {required_keys[key]}" for key in missing_keys))
+
+
+
 class MainApp(TkinterDnD.Tk):
     """Main application class."""
 
@@ -1681,6 +1883,8 @@ class MainApp(TkinterDnD.Tk):
         self.pptx_to_pdf_tool = self.create_tool_tab("PPTX to PDF/PNG", PPTXtoPDFTool)
         self.text_to_speech_tool = self.create_tool_tab("Text to Speech", TextToSpeechTool)  
         self.video_merge_tool = self.create_tool_tab("Video Merge", VideoMergeTool)
+        self.sequential_tool = self.create_tool_tab("Sequential Processing", SequentialProcessingTool)
+
 
 
 
