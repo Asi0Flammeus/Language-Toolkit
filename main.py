@@ -471,7 +471,7 @@ class TextToSpeechTool(ToolBase):
             return None
             
         # Split the filename by common delimiters
-        parts = re.split('[_\- ]', filename_stem.lower())
+        parts = re.split('[_\\- ]', filename_stem.lower())
         
         # Look for any part that matches a voice name (case-insensitive)
         voice_names = {name.lower(): name for name in self.voice_map.keys()}
