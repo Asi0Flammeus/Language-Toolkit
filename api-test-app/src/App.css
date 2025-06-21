@@ -1,0 +1,108 @@
+/* Additional component-specific styles */
+.App {
+  text-align: left;
+}
+
+.api-endpoint-info {
+  background: #e9ecef;
+  padding: 10px;
+  border-radius: 6px;
+  margin-bottom: 15px;
+  font-family: monospace;
+  font-size: 13px;
+}
+
+.test-scenarios {
+  margin-top: 20px;
+  padding: 15px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  border-left: 4px solid #28a745;
+}
+
+.test-scenarios h4 {
+  color: #155724;
+  margin-top: 0;
+}
+
+.test-scenarios ul {
+  margin: 10px 0;
+  padding-left: 20px;
+}
+
+.test-scenarios li {
+  margin-bottom: 5px;
+  color: #495057;
+}
+
+.quick-test-buttons {
+  display: flex;
+  gap: 10px;
+  margin-top: 15px;
+  flex-wrap: wrap;
+}
+
+.status-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.pulse {
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.task-progress-bar {
+  width: 100%;
+  height: 8px;
+  background: #e9ecef;
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 10px 0;
+}
+
+.task-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #667eea, #764ba2);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.endpoint-methods {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 15px;
+}
+
+.method-badge {
+  background: #007bff;
+  color: white;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: bold;
+}
+
+.method-badge.post {
+  background: #28a745;
+}
+
+.method-badge.get {
+  background: #17a2b8;
+}
+
+.method-badge.delete {
+  background: #dc3545;
+}
