@@ -19,17 +19,14 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 import uvicorn
 
-# Import our existing tools
-from main import (
-    ConfigManager, 
-    PPTXTranslationTool, 
-    AudioTranscriptionTool, 
-    TextTranslationTool, 
-    PPTXtoPDFTool,
-    TextToSpeechTool,
-    VideoMergeTool,
-    SequentialProcessingTool
-)
+# Import core functionality modules
+from core.config import ConfigManager
+from core.pptx_translation import PPTXTranslationCore
+from core.transcription import AudioTranscriptionCore
+from core.text_translation import TextTranslationCore
+from core.text_to_speech import TextToSpeechCore
+from core.pptx_converter import PPTXConverterCore
+from core.video_merger import VideoMergerCore
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -105,47 +102,48 @@ def cleanup_temp_dir(temp_dir: Path):
     except Exception as e:
         logger.error(f"Error cleaning up temp dir {temp_dir}: {e}")
 
-async def run_tool_async(tool_class, task_id: str, input_files: List[Path], 
-                        output_dir: Path, **kwargs):
-    """Run a tool asynchronously"""
+async def run_pptx_translation_async(task_id: str, input_files: List[Path], 
+                                   output_dir: Path, source_lang: str, target_lang: str):
+    """Run PPTX translation asynchronously"""
     try:
         # Update task status
         active_tasks[task_id]["status"] = "running"
         
-        # Create progress queue
-        progress_queue = TaskProgressQueue()
+        # Get API key
+        api_keys = config_manager.get_api_keys()
+        deepl_key = api_keys.get("deepl")
+        if not deepl_key:
+            raise ValueError("DeepL API key not configured")
         
-        # Initialize tool
-        tool = tool_class(
-            master=None,  # No GUI needed
-            config_manager=config_manager,
-            progress_queue=progress_queue
-        )
+        # Progress callback
+        def progress_callback(message: str):
+            active_tasks[task_id]["messages"].append(message)
+            logger.info(f"Task {task_id}: {message}")
         
-        # Set tool parameters
-        for key, value in kwargs.items():
-            if hasattr(tool, key):
-                getattr(tool, key).set(value)
-        
-        # Set input paths and output path
-        tool.input_paths = input_files
-        tool.output_path = output_dir
+        # Initialize PPTX translation core
+        translator = PPTXTranslationCore(deepl_key, progress_callback)
         
         # Run processing in thread
         def process_files():
             try:
-                tool.before_processing()
+                result_files = []
                 
                 for input_file in input_files:
-                    if input_file.is_file():
-                        tool.process_file(input_file, output_dir)
-                
-                tool.after_processing()
+                    if input_file.is_file() and input_file.suffix.lower() == '.pptx':
+                        output_file = output_dir / f"translated_{input_file.name}"
+                        
+                        success = translator.translate_pptx(
+                            input_file, output_file, source_lang, target_lang
+                        )
+                        
+                        if success:
+                            result_files.append(str(output_file))
+                        else:
+                            raise RuntimeError(f"Failed to translate {input_file.name}")
                 
                 # Update task with results
-                result_files = list(output_dir.glob("*"))
                 active_tasks[task_id]["status"] = "completed"
-                active_tasks[task_id]["result_files"] = [str(f) for f in result_files]
+                active_tasks[task_id]["result_files"] = result_files
                 
             except Exception as e:
                 logger.error(f"Task {task_id} failed: {e}")
@@ -159,15 +157,162 @@ async def run_tool_async(tool_class, task_id: str, input_files: List[Path],
         # Wait for completion
         while thread.is_alive():
             await asyncio.sleep(0.5)
-            # Update progress
-            messages = progress_queue.get_all_messages()
-            if messages:
-                active_tasks[task_id]["progress"] = messages[-1]
         
         thread.join()
         
     except Exception as e:
-        logger.error(f"Task {task_id} failed: {e}")
+        logger.error(f"Failed to start task {task_id}: {e}")
+        active_tasks[task_id]["status"] = "failed"
+        active_tasks[task_id]["error"] = str(e)
+
+async def run_pptx_conversion_async(task_id: str, input_files: List[Path], 
+                                   output_dir: Path, output_format: str):
+    """Run PPTX to PDF/PNG conversion asynchronously"""
+    try:
+        # Update task status
+        active_tasks[task_id]["status"] = "running"
+        
+        # Get API key
+        api_keys = config_manager.get_api_keys()
+        convertapi_key = api_keys.get("convertapi")
+        if not convertapi_key:
+            raise ValueError("ConvertAPI key not configured")
+        
+        # Progress callback
+        def progress_callback(message: str):
+            active_tasks[task_id]["messages"].append(message)
+            logger.info(f"Task {task_id}: {message}")
+        
+        # Initialize PPTX converter core
+        converter = PPTXConverterCore(convertapi_key, progress_callback)
+        
+        # Run processing in thread
+        def process_files():
+            try:
+                result_files = []
+                
+                for input_file in input_files:
+                    if input_file.is_file() and input_file.suffix.lower() == '.pptx':
+                        if output_format.lower() == 'pdf':
+                            output_file = output_dir / f"{input_file.stem}.pdf"
+                            success = converter.convert_pptx_to_pdf(input_file, output_file)
+                            if success:
+                                result_files.append(str(output_file))
+                        elif output_format.lower() == 'png':
+                            png_files = converter.convert_pptx_to_png(input_file, output_dir)
+                            result_files.extend(png_files)
+                        else:
+                            raise ValueError(f"Unsupported output format: {output_format}")
+                        
+                        if not result_files:
+                            raise RuntimeError(f"Failed to convert {input_file.name}")
+                
+                # Update task with results
+                active_tasks[task_id]["status"] = "completed"
+                active_tasks[task_id]["result_files"] = result_files
+                
+            except Exception as e:
+                logger.error(f"Task {task_id} failed: {e}")
+                active_tasks[task_id]["status"] = "failed"
+                active_tasks[task_id]["error"] = str(e)
+        
+        # Run in thread
+        thread = threading.Thread(target=process_files)
+        thread.start()
+        
+        # Wait for completion
+        while thread.is_alive():
+            await asyncio.sleep(0.5)
+        
+        thread.join()
+        
+    except Exception as e:
+        logger.error(f"Failed to start task {task_id}: {e}")
+        active_tasks[task_id]["status"] = "failed"
+        active_tasks[task_id]["error"] = str(e)
+
+async def run_video_merger_async(task_id: str, input_files: List[Path], 
+                                output_dir: Path, duration_per_slide: float = 3.0,
+                                audio_file: Optional[Path] = None):
+    """Run video merger asynchronously"""
+    try:
+        # Update task status
+        active_tasks[task_id]["status"] = "running"
+        
+        # Progress callback
+        def progress_callback(message: str):
+            active_tasks[task_id]["messages"].append(message)
+            logger.info(f"Task {task_id}: {message}")
+        
+        # Initialize video merger core
+        merger = VideoMergerCore(progress_callback)
+        
+        # Run processing in thread
+        def process_files():
+            try:
+                result_files = []
+                
+                # Check if we have image files or video files
+                image_files = [f for f in input_files if f.suffix.lower() in ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.gif']]
+                video_files = [f for f in input_files if merger.validate_video_file(f)]
+                
+                if image_files:
+                    # Create video from images
+                    output_file = output_dir / "merged_video.mp4"
+                    
+                    # Create temporary directory for images
+                    temp_img_dir = output_dir / "temp_images"
+                    temp_img_dir.mkdir(exist_ok=True)
+                    
+                    # Copy images to temp directory (to ensure proper ordering)
+                    for i, img_file in enumerate(image_files):
+                        temp_img_path = temp_img_dir / f"image_{i:04d}{img_file.suffix}"
+                        temp_img_path.write_bytes(img_file.read_bytes())
+                    
+                    success = merger.create_video_from_files(
+                        temp_img_dir, output_file, duration_per_slide, audio_file
+                    )
+                    
+                    # Clean up temp directory
+                    import shutil
+                    shutil.rmtree(temp_img_dir)
+                    
+                    if success:
+                        result_files.append(str(output_file))
+                
+                elif video_files:
+                    # Merge videos
+                    output_file = output_dir / "merged_video.mp4"
+                    success = merger.merge_videos(video_files, output_file)
+                    if success:
+                        result_files.append(str(output_file))
+                else:
+                    raise ValueError("No valid image or video files found")
+                
+                if not result_files:
+                    raise RuntimeError("Failed to create video")
+                
+                # Update task with results
+                active_tasks[task_id]["status"] = "completed"
+                active_tasks[task_id]["result_files"] = result_files
+                
+            except Exception as e:
+                logger.error(f"Task {task_id} failed: {e}")
+                active_tasks[task_id]["status"] = "failed"
+                active_tasks[task_id]["error"] = str(e)
+        
+        # Run in thread
+        thread = threading.Thread(target=process_files)
+        thread.start()
+        
+        # Wait for completion
+        while thread.is_alive():
+            await asyncio.sleep(0.5)
+        
+        thread.join()
+        
+    except Exception as e:
+        logger.error(f"Failed to start task {task_id}: {e}")
         active_tasks[task_id]["status"] = "failed"
         active_tasks[task_id]["error"] = str(e)
 
@@ -227,18 +372,18 @@ async def translate_pptx(
         "status": "pending",
         "temp_dir": temp_dir,
         "input_files": input_files,
-        "output_dir": output_dir
+        "output_dir": output_dir,
+        "messages": []
     }
     
     # Start background task
     background_tasks.add_task(
-        run_tool_async,
-        PPTXTranslationTool,
+        run_pptx_translation_async,
         task_id,
         input_files,
         output_dir,
-        source_lang=source_lang,
-        target_lang=target_lang
+        source_lang,
+        target_lang
     )
     
     return TaskStatus(task_id=task_id, status="pending")
@@ -375,17 +520,17 @@ async def convert_pptx(
         "status": "pending",
         "temp_dir": temp_dir,
         "input_files": input_files,
-        "output_dir": output_dir
+        "output_dir": output_dir,
+        "messages": []
     }
     
     # Start background task
     background_tasks.add_task(
-        run_tool_async,
-        PPTXtoPDFTool,
+        run_pptx_conversion_async,
         task_id,
         input_files,
         output_dir,
-        output_format=output_format
+        output_format
     )
     
     return TaskStatus(task_id=task_id, status="pending")
@@ -430,6 +575,77 @@ async def text_to_speech(
         task_id,
         input_files,
         output_dir
+    )
+    
+    return TaskStatus(task_id=task_id, status="pending")
+
+@app.post("/video/merge", response_model=TaskStatus)
+async def merge_video(
+    background_tasks: BackgroundTasks,
+    duration_per_slide: Optional[float] = Form(3.0),
+    files: List[UploadFile] = File(...),
+    audio_file: Optional[UploadFile] = File(None)
+):
+    """Create video from images or merge video files"""
+    task_id = create_task_id()
+    temp_dir = get_temp_dir()
+    input_dir = temp_dir / "input"
+    output_dir = temp_dir / "output"
+    input_dir.mkdir(parents=True)
+    output_dir.mkdir(parents=True)
+    
+    # Save uploaded files
+    input_files = []
+    for file in files:
+        # Accept both image and video files
+        allowed_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.gif', 
+                            '.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.wmv'}
+        file_ext = Path(file.filename).suffix.lower()
+        
+        if file_ext not in allowed_extensions:
+            raise HTTPException(status_code=400, 
+                              detail=f"Unsupported file format: {file_ext}. "
+                                   f"Supported: {', '.join(allowed_extensions)}")
+        
+        file_path = input_dir / file.filename
+        with open(file_path, "wb") as f:
+            content = await file.read()
+            f.write(content)
+        input_files.append(file_path)
+    
+    # Save audio file if provided
+    audio_path = None
+    if audio_file and audio_file.filename:
+        audio_extensions = {'.mp3', '.wav', '.aac', '.m4a', '.flac', '.ogg'}
+        audio_ext = Path(audio_file.filename).suffix.lower()
+        
+        if audio_ext not in audio_extensions:
+            raise HTTPException(status_code=400, 
+                              detail=f"Unsupported audio format: {audio_ext}. "
+                                   f"Supported: {', '.join(audio_extensions)}")
+        
+        audio_path = input_dir / audio_file.filename
+        with open(audio_path, "wb") as f:
+            content = await audio_file.read()
+            f.write(content)
+    
+    # Initialize task
+    active_tasks[task_id] = {
+        "status": "pending",
+        "temp_dir": temp_dir,
+        "input_files": input_files,
+        "output_dir": output_dir,
+        "messages": []
+    }
+    
+    # Start background task
+    background_tasks.add_task(
+        run_video_merger_async,
+        task_id,
+        input_files,
+        output_dir,
+        duration_per_slide,
+        audio_path
     )
     
     return TaskStatus(task_id=task_id, status="pending")
