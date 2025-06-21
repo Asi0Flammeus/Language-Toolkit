@@ -1,4 +1,29 @@
-"""PPTX Translation Core Functionality"""
+"""
+PPTX Translation Core Module
+
+This module provides PowerPoint presentation translation functionality using the DeepL API.
+It can translate text content within PPTX files while preserving formatting, layout, and structure.
+
+Usage Examples:
+    GUI: Integrated into a file selection interface with progress bars and language dropdowns
+    API: Used via REST endpoints for batch translation services
+    CLI: Command-line translation of presentation files
+
+Features:
+    - DeepL API integration for high-quality translation
+    - Preserves PowerPoint formatting and layout
+    - Handles text in slides, shapes, tables, and text frames
+    - Progress callback support for user feedback
+    - Comprehensive error handling and validation
+    - Support for all DeepL supported languages
+
+Supported Content:
+    - Slide text content
+    - Table cell text
+    - Text frame paragraphs
+    - Shape text content
+    - Maintains original formatting and styling
+"""
 
 import logging
 import deepl
@@ -10,7 +35,35 @@ import fitz
 logger = logging.getLogger(__name__)
 
 class PPTXTranslationCore:
-    """Core PPTX translation functionality without GUI dependencies."""
+    """
+    Core PPTX translation functionality using DeepL API.
+    
+    This class provides comprehensive PowerPoint translation capabilities while
+    maintaining the original presentation structure, formatting, and layout.
+    It processes all text content including slides, tables, and text frames.
+    
+    Key Features:
+        - High-quality translation via DeepL API
+        - Preserves original formatting and layout
+        - Handles complex PowerPoint structures
+        - Progress tracking with callback support
+        - Robust error handling and validation
+        - Support for all DeepL language pairs
+    
+    Requirements:
+        - DeepL API key
+        - python-pptx library
+        - Valid PPTX input files
+    
+    Example Usage:
+        translator = PPTXTranslationCore(api_key="your-deepl-key")
+        success = translator.translate_pptx(
+            input_path=Path("presentation.pptx"),
+            output_path=Path("translated.pptx"),
+            source_lang="en",
+            target_lang="fr"
+        )
+    """
     
     def __init__(self, api_key: str, progress_callback: Optional[Callable[[str], None]] = None):
         """

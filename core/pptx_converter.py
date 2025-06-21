@@ -1,4 +1,35 @@
-"""PPTX to PDF/PNG Conversion Core Functionality"""
+"""
+PPTX to PDF/PNG Conversion Core Module
+
+This module provides PowerPoint to PDF and PNG conversion functionality using ConvertAPI.
+It can convert PPTX presentations to high-quality PDF documents or individual PNG images.
+
+Usage Examples:
+    GUI: Integrated with file browsers, format selection, and progress indicators
+    API: Used via REST endpoints for document conversion services
+    CLI: Command-line presentation conversion for batch processing
+
+Features:
+    - ConvertAPI integration for reliable conversion
+    - PDF conversion (single document output)
+    - PNG conversion (individual slide images)
+    - High-quality output preservation
+    - Progress callback support for user feedback
+    - Comprehensive error handling and validation
+    - Batch processing capabilities
+
+Output Formats:
+    - PDF: Single document with all slides
+    - PNG: Individual image files per slide
+    - Maintains original slide dimensions and quality
+    - Preserves fonts and formatting
+
+Conversion Quality:
+    - High-resolution output
+    - Vector graphics preservation (PDF)
+    - Consistent rendering across platforms
+    - Professional document quality
+"""
 
 import logging
 import convertapi
@@ -8,7 +39,42 @@ from typing import Optional, Callable, List
 logger = logging.getLogger(__name__)
 
 class PPTXConverterCore:
-    """Core PPTX to PDF/PNG conversion functionality without GUI dependencies."""
+    """
+    Core PPTX to PDF/PNG conversion functionality using ConvertAPI.
+    
+    This class provides reliable PowerPoint conversion capabilities with
+    support for both PDF and PNG output formats. It maintains high quality
+    and preserves original presentation formatting.
+    
+    Key Features:
+        - Reliable conversion via ConvertAPI
+        - Multiple output format support (PDF, PNG)
+        - High-quality output preservation
+        - Progress tracking with callback support
+        - Batch processing capabilities
+        - Comprehensive error handling
+        - Professional document quality
+    
+    Requirements:
+        - ConvertAPI key and subscription
+        - convertapi Python library
+        - Valid PPTX input files
+    
+    Example Usage:
+        converter = PPTXConverterCore(api_key="your-convertapi-key")
+        
+        # Convert to PDF
+        success = converter.convert_pptx_to_pdf(
+            input_path=Path("presentation.pptx"),
+            output_path=Path("document.pdf")
+        )
+        
+        # Convert to PNG images
+        png_files = converter.convert_pptx_to_png(
+            input_path=Path("presentation.pptx"),
+            output_dir=Path("images/")
+        )
+    """
     
     def __init__(self, api_key: str, progress_callback: Optional[Callable[[str], None]] = None):
         """

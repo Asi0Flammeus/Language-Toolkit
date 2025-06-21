@@ -1,4 +1,29 @@
-"""Text Translation Core Functionality"""
+"""
+Text Translation Core Module
+
+This module provides text file translation functionality using the DeepL API.
+It can translate plain text files between multiple languages while preserving formatting.
+
+Usage Examples:
+    GUI: Integrated with file browsers, language selection, and progress indicators
+    API: Used via REST endpoints for text translation services
+    CLI: Command-line text translation for batch processing
+
+Features:
+    - DeepL API integration for high-quality translation
+    - Support for plain text file translation
+    - Direct string translation capability
+    - Language auto-detection support
+    - Progress callback support for user feedback
+    - Comprehensive error handling and validation
+    - Support for all DeepL supported language pairs
+
+Supported Text Formats:
+    - Plain text files (.txt)
+    - UTF-8 encoding support
+    - Preserves line breaks and basic formatting
+    - Handles large text files efficiently
+"""
 
 import logging
 import deepl
@@ -8,7 +33,41 @@ from typing import Optional, Callable, Dict, Any
 logger = logging.getLogger(__name__)
 
 class TextTranslationCore:
-    """Core text translation functionality without GUI dependencies."""
+    """
+    Core text translation functionality using DeepL API.
+    
+    This class provides high-quality text translation capabilities for both
+    files and direct string translation. It supports automatic language
+    detection and manual language specification.
+    
+    Key Features:
+        - High-quality translation via DeepL API
+        - File and string translation support
+        - Automatic language detection
+        - Manual source language specification
+        - Progress tracking with callback support
+        - UTF-8 encoding support
+        - Comprehensive error handling
+    
+    Requirements:
+        - DeepL API key
+        - deepl Python library
+        - Valid text input files or strings
+    
+    Example Usage:
+        translator = TextTranslationCore(api_key="your-deepl-key")
+        
+        # File translation
+        success = translator.translate_text_file(
+            input_path=Path("document.txt"),
+            output_path=Path("translated.txt"),
+            source_lang="en",
+            target_lang="fr"
+        )
+        
+        # Direct string translation
+        result = translator.translate_text("Hello world", "en", "fr")
+    """
     
     def __init__(self, api_key: str, progress_callback: Optional[Callable[[str], None]] = None):
         """

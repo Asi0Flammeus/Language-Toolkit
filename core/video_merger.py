@@ -1,4 +1,37 @@
-"""Video Merger Core Functionality"""
+"""
+Video Merger Core Module
+
+This module provides video creation and merging functionality using FFmpeg.
+It can create videos from image sequences, merge multiple videos, and add audio tracks.
+
+Usage Examples:
+    GUI: Integrated with file browsers, timeline controls, and video preview
+    API: Used via REST endpoints for video processing services
+    CLI: Command-line video creation and merging for automation
+
+Features:
+    - FFmpeg integration for professional video processing
+    - Create videos from image sequences (PNG, JPG, etc.)
+    - Merge multiple video files into one
+    - Add audio tracks to videos
+    - Customizable slide duration and transitions
+    - Support for various video and audio formats
+    - Progress callback support for user feedback
+    - Professional output quality (1920x1080, 30fps)
+
+Video Creation Capabilities:
+    - Image sequence to video conversion
+    - Automatic image sorting and sequencing
+    - Customizable duration per slide/image
+    - Fade transitions between slides
+    - Audio overlay support
+    - Professional video encoding (H.264)
+
+Supported Formats:
+    Video: MP4, AVI, MOV, MKV, WebM, FLV, WMV
+    Audio: MP3, WAV, AAC, M4A, FLAC, OGG
+    Images: PNG, JPG, JPEG, BMP, TIFF, GIF
+"""
 
 import logging
 import subprocess
@@ -11,7 +44,44 @@ from typing import Optional, Callable, List, Dict, Any
 logger = logging.getLogger(__name__)
 
 class VideoMergerCore:
-    """Core video merger functionality without GUI dependencies."""
+    """
+    Core video merger functionality using FFmpeg.
+    
+    This class provides comprehensive video processing capabilities including
+    creating videos from image sequences, merging videos, and adding audio.
+    It uses FFmpeg for professional-quality video processing.
+    
+    Key Features:
+        - Professional video processing via FFmpeg
+        - Image sequence to video conversion
+        - Video merging and concatenation
+        - Audio track integration
+        - Customizable timing and transitions
+        - Multi-format support
+        - High-quality output (1920x1080, 30fps)
+    
+    Requirements:
+        - FFmpeg installed and available in PATH
+        - Valid input files (images, videos, audio)
+        - Sufficient disk space for processing
+    
+    Example Usage:
+        merger = VideoMergerCore()
+        
+        # Create video from images
+        success = merger.create_video_from_files(
+            input_dir=Path("images/"),
+            output_path=Path("video.mp4"),
+            duration_per_slide=3.0,
+            audio_file=Path("soundtrack.mp3")
+        )
+        
+        # Merge multiple videos
+        success = merger.merge_videos(
+            input_videos=[Path("video1.mp4"), Path("video2.mp4")],
+            output_path=Path("merged.mp4")
+        )
+    """
     
     def __init__(self, progress_callback: Optional[Callable[[str], None]] = None):
         """

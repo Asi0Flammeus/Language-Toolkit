@@ -1,4 +1,30 @@
-"""Audio Transcription Core Functionality"""
+"""
+Audio Transcription Core Module
+
+This module provides audio-to-text transcription functionality using OpenAI's Whisper API.
+It can convert spoken audio in various formats into accurate text transcriptions.
+
+Usage Examples:
+    GUI: Integrated with file browsers, progress bars, and language selection dropdowns
+    API: Used via REST endpoints for transcription services and batch processing
+    CLI: Command-line audio transcription for automation workflows
+
+Features:
+    - OpenAI Whisper API integration for state-of-the-art transcription
+    - Support for multiple audio formats (MP3, WAV, M4A, OGG, FLAC, WebM)
+    - Language detection and manual language specification
+    - Progress callback support for user feedback
+    - Robust error handling and validation
+    - High accuracy transcription results
+
+Supported Audio Formats:
+    - MP3 (most common)
+    - WAV (uncompressed)
+    - M4A (Apple format)
+    - OGG (open source)
+    - FLAC (lossless)
+    - WebM (web format)
+"""
 
 import logging
 import openai
@@ -8,7 +34,35 @@ from typing import Optional, Callable, Dict, Any
 logger = logging.getLogger(__name__)
 
 class AudioTranscriptionCore:
-    """Core audio transcription functionality without GUI dependencies."""
+    """
+    Core audio transcription functionality using OpenAI Whisper API.
+    
+    This class provides high-quality audio-to-text transcription capabilities
+    supporting multiple audio formats and languages. It uses OpenAI's Whisper
+    model for accurate speech recognition.
+    
+    Key Features:
+        - State-of-the-art transcription via OpenAI Whisper
+        - Multi-format audio support
+        - Automatic language detection
+        - Manual language specification support
+        - Progress tracking with callback support
+        - Comprehensive error handling
+        - High accuracy results
+    
+    Requirements:
+        - OpenAI API key
+        - openai Python library
+        - Valid audio input files
+    
+    Example Usage:
+        transcriber = AudioTranscriptionCore(api_key="your-openai-key")
+        success = transcriber.transcribe_audio(
+            input_path=Path("audio.mp3"),
+            output_path=Path("transcript.txt"),
+            language="en"  # Optional
+        )
+    """
     
     def __init__(self, api_key: str, progress_callback: Optional[Callable[[str], None]] = None):
         """

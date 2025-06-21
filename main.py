@@ -21,6 +21,7 @@ import fitz
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.dml import MSO_THEME_COLOR, MSO_COLOR_TYPE
+from core.tool_descriptions import get_short_description, get_tool_info, get_quick_tips
 
 
 # --- Constants ---
@@ -1881,9 +1882,20 @@ class MainApp(TkinterDnD.Tk):
         """Creates the main UI elements."""
         # Menu
         self.menu_bar = tk.Menu(self)
+        
+        # Configuration menu
         self.config_menu = tk.Menu(self.menu_bar, tearoff=0)
         self.config_menu.add_command(label="API Keys", command=self.open_api_key_config)
         self.menu_bar.add_cascade(label="Configuration", menu=self.config_menu)
+        
+        # Help menu
+        self.help_menu = tk.Menu(self.menu_bar, tearoff=0)
+        self.help_menu.add_command(label="Tool Overview", command=self.show_tool_overview)
+        self.help_menu.add_command(label="API Requirements", command=self.show_api_requirements)
+        self.help_menu.add_separator()
+        self.help_menu.add_command(label="About", command=self.show_about)
+        self.menu_bar.add_cascade(label="Help", menu=self.help_menu)
+        
         self.config(menu=self.menu_bar)
 
         # Notebook (Tab Control)
@@ -1918,6 +1930,24 @@ class MainApp(TkinterDnD.Tk):
         frame = ttk.Frame(self.notebook)
         self.notebook.add(frame, text=tab_name)
         
+        # Map tool classes to description keys
+        tool_description_map = {
+            PPTXTranslationTool: "pptx_translation",
+            AudioTranscriptionTool: "audio_transcription", 
+            TextTranslationTool: "text_translation",
+            PPTXtoPDFTool: "pptx_to_pdf_png",
+            TextToSpeechTool: "text_to_speech",
+            VideoMergeTool: "video_merge",
+            SequentialProcessingTool: "sequential_processing"
+        }
+        
+        # Get tool description key
+        tool_key = tool_description_map.get(tool_class)
+        
+        # Add description at the top of the tab
+        if tool_key:
+            self.add_tool_description(frame, tool_key)
+        
         tool = tool_class(
             master=frame,
             config_manager=self.config_manager,
@@ -1927,6 +1957,109 @@ class MainApp(TkinterDnD.Tk):
         self.create_tool_ui(frame, tool)
         return tool
 
+    def add_tool_description(self, frame, tool_key):
+        """Add description and help information to the tool tab."""
+        try:
+            # Get tool information
+            tool_info = get_tool_info(tool_key)
+            if not tool_info:
+                return
+            
+            desc = tool_info["description"]
+            req = tool_info["requirements"]
+            tips = tool_info["tips"]
+            
+            # Create description frame
+            desc_frame = ttk.LabelFrame(frame, text=" Tool Information", padding=10)
+            desc_frame.pack(fill="x", padx=5, pady=5)
+            
+            # Main description
+            desc_label = tk.Label(desc_frame, text=desc["description"], 
+                                font=("Arial", 10, "bold"), fg="navy", wraplength=700)
+            desc_label.pack(anchor="w")
+            
+            # Detailed description
+            detail_label = tk.Label(desc_frame, text=desc["details"], 
+                                  font=("Arial", 9), fg="gray40", wraplength=700)
+            detail_label.pack(anchor="w", pady=(2, 8))
+            
+            # API requirement info
+            if req.get("api_required"):
+                api_text = f"🔑 Requires: {req['api_required']} API key"
+                if req["api_required"] == "Multiple":
+                    api_text = "🔑 Requires: Multiple API keys (see Configuration menu)"
+                api_label = tk.Label(desc_frame, text=api_text, 
+                                   font=("Arial", 9), fg="red")
+                api_label.pack(anchor="w")
+            else:
+                no_api_label = tk.Label(desc_frame, text="✅ No API key required", 
+                                      font=("Arial", 9), fg="green")
+                no_api_label.pack(anchor="w")
+            
+            # Quick tips (collapsible)
+            if tips:
+                tips_frame = ttk.Frame(desc_frame)
+                tips_frame.pack(fill="x", pady=(5, 0))
+                
+                # Tips toggle button
+                self.tips_visible = tk.BooleanVar(value=False)
+                tips_btn = tk.Button(tips_frame, text="💡 Show Quick Tips", 
+                                   command=lambda: self.toggle_tips(tips_frame, tool_key, tips))
+                tips_btn.pack(anchor="w")
+                
+        except Exception as e:
+            # Silently handle any errors in description display
+            logging.warning(f"Could not add description for {tool_key}: {e}")
+
+    def add_tab_tooltip(self, tab_name, tool_key):
+        """Add tooltip to notebook tab."""
+        try:
+            short_desc = get_short_description(tool_key)
+            if short_desc and short_desc != "Tool description not available":
+                # Create a simple tooltip by binding to the tab
+                self.create_tooltip_for_tab(tab_name, short_desc)
+        except Exception as e:
+            logging.warning(f"Could not add tooltip for {tool_key}: {e}")
+
+    def create_tooltip_for_tab(self, tab_name, description):
+        """Create a tooltip for a specific tab."""
+        def show_tooltip(event):
+            # Simple tooltip implementation - could be enhanced
+            tooltip = tk.Toplevel()
+            tooltip.wm_overrideredirect(True)
+            tooltip.wm_geometry(f"+{event.x_root + 10}+{event.y_root + 10}")
+            
+            label = tk.Label(tooltip, text=description, background="lightyellow", 
+                           relief="solid", borderwidth=1, font=("Arial", 9),
+                           wraplength=300)
+            label.pack()
+            
+            # Auto-hide after 3 seconds
+            tooltip.after(3000, tooltip.destroy)
+        
+        # This is a simplified tooltip - in a full implementation you'd want
+        # to bind to the actual tab widget, but tkinter notebook tabs are complex
+        pass
+
+    def toggle_tips(self, parent_frame, tool_key, tips):
+        """Toggle display of quick tips."""
+        # Remove existing tips if any
+        for widget in parent_frame.winfo_children():
+            if isinstance(widget, tk.Frame) and hasattr(widget, 'tips_frame'):
+                widget.destroy()
+                return
+        
+        # Create tips display
+        tips_display = tk.Frame(parent_frame)
+        tips_display.tips_frame = True  # Mark as tips frame
+        tips_display.pack(fill="x", pady=(5, 0))
+        
+        tk.Label(tips_display, text="Quick Tips:", font=("Arial", 9, "bold")).pack(anchor="w")
+        
+        for i, tip in enumerate(tips, 1):
+            tip_label = tk.Label(tips_display, text=f"  {i}. {tip}", 
+                               font=("Arial", 8), fg="gray30", wraplength=650)
+            tip_label.pack(anchor="w", padx=(10, 0))
 
     def create_tool_ui(self, frame, tool):
         """Creates the UI elements for a specific tool."""
@@ -2124,6 +2257,142 @@ class MainApp(TkinterDnD.Tk):
         self.progress_text.insert(tk.END, message + "\n")
         self.progress_text.see(tk.END)
         self.progress_text.config(state="disabled")
+
+    def show_tool_overview(self):
+        """Show overview of all available tools."""
+        try:
+            from core.tool_descriptions import get_tool_list_for_gui
+            
+            # Create overview window
+            overview_window = tk.Toplevel(self)
+            overview_window.title("Tool Overview")
+            overview_window.geometry("700x500")
+            overview_window.resizable(True, True)
+            
+            # Create scrollable frame
+            canvas = tk.Canvas(overview_window)
+            scrollbar = ttk.Scrollbar(overview_window, orient="vertical", command=canvas.yview)
+            scrollable_frame = ttk.Frame(canvas)
+            
+            scrollable_frame.bind(
+                "<Configure>",
+                lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+            )
+            
+            canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+            canvas.configure(yscrollcommand=scrollbar.set)
+            
+            # Title
+            title_label = tk.Label(scrollable_frame, text="Language Toolkit - Tool Overview", 
+                                 font=("Arial", 16, "bold"), fg="navy")
+            title_label.pack(pady=10)
+            
+            # Get all tools
+            tools = get_tool_list_for_gui()
+            
+            for tool in tools:
+                # Tool frame
+                tool_frame = ttk.LabelFrame(scrollable_frame, text=tool["title"], padding=10)
+                tool_frame.pack(fill="x", padx=10, pady=5)
+                
+                # Description
+                desc_label = tk.Label(tool_frame, text=tool["description"], 
+                                    font=("Arial", 10), wraplength=600)
+                desc_label.pack(anchor="w")
+                
+                # API requirement
+                if tool["has_api_requirement"]:
+                    api_label = tk.Label(tool_frame, text=f"🔑 Requires: {tool['api_required']} API key", 
+                                       font=("Arial", 9), fg="red")
+                    api_label.pack(anchor="w", pady=(5, 0))
+                else:
+                    api_label = tk.Label(tool_frame, text="✅ No API key required", 
+                                       font=("Arial", 9), fg="green")
+                    api_label.pack(anchor="w", pady=(5, 0))
+            
+            canvas.pack(side="left", fill="both", expand=True)
+            scrollbar.pack(side="right", fill="y")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not show tool overview: {e}")
+
+    def show_api_requirements(self):
+        """Show API key requirements for all tools."""
+        try:
+            from core.tool_descriptions import get_tool_requirements
+            
+            requirements = get_tool_requirements()
+            
+            # Create requirements window
+            req_window = tk.Toplevel(self)
+            req_window.title("API Key Requirements")
+            req_window.geometry("600x400")
+            
+            # Title
+            title_label = tk.Label(req_window, text="API Key Requirements", 
+                                 font=("Arial", 16, "bold"), fg="navy")
+            title_label.pack(pady=10)
+            
+            # Instructions
+            instructions = tk.Label(req_window, 
+                                  text="Configure API keys via Configuration → API Keys menu",
+                                  font=("Arial", 10), fg="gray40")
+            instructions.pack(pady=(0, 10))
+            
+            # Scrollable frame for requirements
+            canvas = tk.Canvas(req_window)
+            scrollbar = ttk.Scrollbar(req_window, orient="vertical", command=canvas.yview)
+            scrollable_frame = ttk.Frame(canvas)
+            
+            scrollable_frame.bind(
+                "<Configure>",
+                lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+            )
+            
+            canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+            canvas.configure(yscrollcommand=scrollbar.set)
+            
+            for tool_name, req in requirements.items():
+                tool_frame = ttk.LabelFrame(scrollable_frame, text=tool_name.replace("_", " ").title(), padding=10)
+                tool_frame.pack(fill="x", padx=10, pady=5)
+                
+                if req["api_required"]:
+                    req_label = tk.Label(tool_frame, text=f"Required: {req['api_required']}", 
+                                       font=("Arial", 10, "bold"), fg="red")
+                    req_label.pack(anchor="w")
+                    
+                    desc_label = tk.Label(tool_frame, text=req["api_description"], 
+                                        font=("Arial", 9), fg="gray40")
+                    desc_label.pack(anchor="w")
+                else:
+                    no_req_label = tk.Label(tool_frame, text="No API key required", 
+                                          font=("Arial", 10), fg="green")
+                    no_req_label.pack(anchor="w")
+            
+            canvas.pack(side="left", fill="both", expand=True, padx=(10, 0))
+            scrollbar.pack(side="right", fill="y", padx=(0, 10))
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not show API requirements: {e}")
+
+    def show_about(self):
+        """Show about dialog."""
+        about_text = """Language Toolkit
+        
+A comprehensive suite of tools for language processing, document conversion, and content creation.
+
+Features:
+• PowerPoint Translation
+• Audio Transcription  
+• Text Translation
+• Document Conversion
+• Text-to-Speech Generation
+• Video Creation and Merging
+• Sequential Processing Workflows
+
+Built with Python and integrates with leading AI services for professional-quality results."""
+        
+        messagebox.showinfo("About Language Toolkit", about_text)
 
 if __name__ == "__main__":
     app = MainApp()

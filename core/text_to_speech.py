@@ -1,4 +1,34 @@
-"""Text-to-Speech Core Functionality"""
+"""
+Text-to-Speech Core Module
+
+This module provides text-to-speech functionality using the ElevenLabs API.
+It can convert text files into high-quality audio with various voice options and settings.
+
+Usage Examples:
+    GUI: Integrated with file browsers, voice selection dropdowns, and audio controls
+    API: Used via REST endpoints for audio generation services
+    CLI: Command-line text-to-speech conversion for automation
+
+Features:
+    - ElevenLabs API integration for realistic voice synthesis
+    - Multiple voice options with different characteristics
+    - Customizable voice settings (stability, similarity, style)
+    - Support for multilingual voices
+    - Progress callback support for user feedback
+    - Automatic retry logic for network reliability
+    - Voice auto-detection from filenames
+
+Voice Settings:
+    - Stability: Controls voice consistency (0.0-1.0)
+    - Similarity Boost: Enhances voice similarity (0.0-1.0)
+    - Style: Adjusts speaking style (0.0-1.0)
+    - Speaker Boost: Improves voice clarity (boolean)
+
+Supported Text Formats:
+    - Plain text files (.txt)
+    - UTF-8 encoding
+    - Handles large text content efficiently
+"""
 
 import logging
 import requests
@@ -11,7 +41,46 @@ from typing import Optional, Callable, Dict, Any, List
 logger = logging.getLogger(__name__)
 
 class TextToSpeechCore:
-    """Core text-to-speech functionality without GUI dependencies."""
+    """
+    Core text-to-speech functionality using ElevenLabs API.
+    
+    This class provides high-quality text-to-speech conversion with support
+    for multiple voices, customizable settings, and robust error handling.
+    It can process text files and generate realistic audio output.
+    
+    Key Features:
+        - Realistic voice synthesis via ElevenLabs API
+        - Multiple voice options and characteristics
+        - Customizable voice settings and parameters
+        - Multilingual voice support
+        - Progress tracking with callback support
+        - Network retry logic for reliability
+        - Voice auto-detection capabilities
+    
+    Requirements:
+        - ElevenLabs API key
+        - requests library
+        - Valid text input files
+    
+    Example Usage:
+        tts = TextToSpeechCore(api_key="your-elevenlabs-key")
+        
+        # Get available voices
+        voices = tts.get_voices()
+        
+        # Generate audio with custom settings
+        success = tts.generate_audio(
+            input_path=Path("text.txt"),
+            output_path=Path("audio.mp3"),
+            voice_id="voice_id_here",
+            voice_settings={
+                "stability": 0.7,
+                "similarity_boost": 0.8,
+                "style": 0.2,
+                "use_speaker_boost": True
+            }
+        )
+    """
     
     MAX_RETRIES = 3
     RETRY_DELAY = 2

@@ -1,4 +1,20 @@
-"""Configuration management for Language Toolkit"""
+"""
+Configuration Management Core Module
+
+This module provides configuration management functionality for the Language Toolkit.
+It handles loading, saving, and managing application settings, API keys, and supported languages.
+
+Usage Examples:
+    GUI: Used to store user preferences, API keys, and language selections
+    API: Used to load API keys for service authentication and language validation
+    
+Features:
+    - JSON-based configuration storage
+    - Secure API key management
+    - Language support configuration
+    - Default settings initialization
+    - Cross-platform configuration directory handling
+"""
 
 import json
 import logging
@@ -8,7 +24,29 @@ from typing import Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 class ConfigManager:
-    """Manages configuration files and settings."""
+    """
+    Manages configuration files and settings for the Language Toolkit.
+    
+    This class provides a centralized way to handle application configuration,
+    including API keys, supported languages, and user preferences. Configuration
+    is stored in JSON format in the user's Documents directory.
+    
+    Key Features:
+        - Automatic configuration directory creation
+        - Default configuration generation
+        - API key secure storage and retrieval
+        - Language configuration management
+        - Cross-platform compatibility
+    
+    Configuration Location:
+        ~/Documents/Language Toolkit/config.json
+    
+    Example Usage:
+        config = ConfigManager()
+        api_keys = config.get_api_keys()
+        languages = config.get_languages()
+        config.save_api_keys({"deepl": "your-key", "openai": "your-key"})
+    """
     
     def __init__(self):
         self.config = {}
