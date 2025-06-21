@@ -4,6 +4,7 @@ Provides REST endpoints for all language processing tools
 """
 
 import asyncio
+import json
 import logging
 import queue
 import threading
@@ -14,8 +15,10 @@ import tempfile
 import shutil
 import os
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Form
+from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Form, Depends
 from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import uvicorn
 
@@ -39,9 +42,141 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],  # React dev server
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+)
+
 # Global task storage
 active_tasks: Dict[str, Dict] = {}
-config_manager = ConfigManager()
+config_manager = ConfigManager(use_project_api_keys=True)
+
+# Authentication setup
+security = HTTPBearer()
+
+def load_auth_tokens() -> List[str]:
+    """Load whitelisted authentication tokens from auth_tokens.json"""
+    try:
+        auth_file = Path(__file__).parent / "auth_tokens.json"
+        if auth_file.exists():
+            with open(auth_file, 'r', encoding='utf-8') as f:
+                auth_data = json.load(f)
+                return auth_data.get("tokens", [])
+        else:
+            logger.warning(f"Auth tokens file not found: {auth_file}")
+            return []
+    except Exception as e:
+        logger.error(f"Failed to load auth tokens: {e}")
+        return []
+
+# Load authorized tokens
+AUTHORIZED_TOKENS = load_auth_tokens()
+
+async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Verify the provided authentication token"""
+    if not AUTHORIZED_TOKENS:
+        logger.warning("No authorized tokens configured - allowing all requests")
+        return credentials.credentials
+    
+    if credentials.credentials not in AUTHORIZED_TOKENS:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid authentication token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return credentials.credentials
+
+async def run_tool_async(tool_class, task_id: str, input_files: List[Path], 
+                        output_dir: Path, **kwargs):
+    """Run a core tool asynchronously"""
+    try:
+        # Update task status
+        active_tasks[task_id]["status"] = "running"
+        
+        # Get API keys
+        api_keys = config_manager.get_api_keys()
+        
+        # Progress callback
+        def progress_callback(message: str):
+            if "messages" in active_tasks[task_id]:
+                active_tasks[task_id]["messages"].append(message)
+            logger.info(f"Task {task_id}: {message}")
+        
+        # Initialize tool based on type
+        if tool_class == TextTranslationCore:
+            deepl_key = api_keys.get("deepl")
+            if not deepl_key:
+                raise ValueError("DeepL API key not configured")
+            tool = TextTranslationCore(deepl_key, progress_callback)
+        elif tool_class == AudioTranscriptionCore:
+            openai_key = api_keys.get("openai")
+            if not openai_key:
+                raise ValueError("OpenAI API key not configured")
+            tool = AudioTranscriptionCore(openai_key, progress_callback)
+        elif tool_class == TextToSpeechCore:
+            elevenlabs_key = api_keys.get("elevenlabs")
+            if not elevenlabs_key:
+                raise ValueError("ElevenLabs API key not configured")
+            tool = TextToSpeechCore(elevenlabs_key, progress_callback)
+        else:
+            raise ValueError(f"Unsupported tool class: {tool_class}")
+        
+        # Run processing in thread
+        def process_files():
+            try:
+                result_files = []
+                
+                for input_file in input_files:
+                    if input_file.is_file():
+                        if tool_class == TextTranslationCore:
+                            # Text translation
+                            output_file = output_dir / f"translated_{input_file.name}"
+                            success = tool.translate_text_file(
+                                input_file, output_file, 
+                                kwargs.get("source_lang"), kwargs.get("target_lang")
+                            )
+                            if success:
+                                result_files.append(str(output_file))
+                        elif tool_class == AudioTranscriptionCore:
+                            # Audio transcription
+                            output_file = output_dir / f"transcript_{input_file.stem}.txt"
+                            success = tool.transcribe_audio_file(input_file, output_file)
+                            if success:
+                                result_files.append(str(output_file))
+                        elif tool_class == TextToSpeechCore:
+                            # Text to speech
+                            output_file = output_dir / f"audio_{input_file.stem}.mp3"
+                            success = tool.text_to_speech_file(input_file, output_file)
+                            if success:
+                                result_files.append(str(output_file))
+                
+                # Update task with results
+                active_tasks[task_id]["status"] = "completed"
+                active_tasks[task_id]["result_files"] = result_files
+                
+            except Exception as e:
+                logger.error(f"Task {task_id} failed: {e}")
+                active_tasks[task_id]["status"] = "failed"
+                active_tasks[task_id]["error"] = str(e)
+        
+        # Run in thread
+        thread = threading.Thread(target=process_files)
+        thread.start()
+        
+        # Wait for completion
+        while thread.is_alive():
+            await asyncio.sleep(0.5)
+        
+        thread.join()
+        
+    except Exception as e:
+        logger.error(f"Failed to start task {task_id}: {e}")
+        active_tasks[task_id]["status"] = "failed"
+        active_tasks[task_id]["error"] = str(e)
 
 class TaskStatus(BaseModel):
     """Task status response model"""
@@ -329,9 +464,16 @@ async def root():
             "convert_pptx": "/convert/pptx",
             "text_to_speech": "/tts",
             "merge_video": "/video/merge",
-            "sequential_process": "/process/sequential",
             "task_status": "/tasks/{task_id}",
-            "download_result": "/download/{task_id}"
+            "download_results": "/download/{task_id}",
+            "download_single_file": "/download/{task_id}/{file_index}",
+            "list_tasks": "/tasks",
+            "cleanup_task": "/tasks/{task_id}"
+        },
+        "notes": {
+            "single_file_download": "When a task has only one result file, /download/{task_id} returns the file directly",
+            "multiple_files_download": "When a task has multiple result files, /download/{task_id} returns a ZIP archive",
+            "individual_file_download": "Use /download/{task_id}/{file_index} to download a specific file (0-based index)"
         }
     }
 
@@ -345,7 +487,8 @@ async def translate_pptx(
     background_tasks: BackgroundTasks,
     source_lang: str = Form(...),
     target_lang: str = Form(...),
-    files: List[UploadFile] = File(...)
+    files: List[UploadFile] = File(...),
+    token: str = Depends(verify_token)
 ):
     """Translate PPTX files from source to target language"""
     task_id = create_task_id()
@@ -393,7 +536,8 @@ async def translate_text(
     background_tasks: BackgroundTasks,
     source_lang: str = Form(...),
     target_lang: str = Form(...),
-    files: List[UploadFile] = File(...)
+    files: List[UploadFile] = File(...),
+    token: str = Depends(verify_token)
 ):
     """Translate text files from source to target language"""
     task_id = create_task_id()
@@ -420,13 +564,14 @@ async def translate_text(
         "status": "pending",
         "temp_dir": temp_dir,
         "input_files": input_files,
-        "output_dir": output_dir
+        "output_dir": output_dir,
+        "messages": []
     }
     
     # Start background task
     background_tasks.add_task(
         run_tool_async,
-        TextTranslationTool,
+        TextTranslationCore,
         task_id,
         input_files,
         output_dir,
@@ -439,7 +584,8 @@ async def translate_text(
 @app.post("/transcribe/audio", response_model=TaskStatus)
 async def transcribe_audio(
     background_tasks: BackgroundTasks,
-    files: List[UploadFile] = File(...)
+    files: List[UploadFile] = File(...),
+    token: str = Depends(verify_token)
 ):
     """Transcribe audio files to text"""
     task_id = create_task_id()
@@ -472,13 +618,14 @@ async def transcribe_audio(
         "status": "pending",
         "temp_dir": temp_dir,
         "input_files": input_files,
-        "output_dir": output_dir
+        "output_dir": output_dir,
+        "messages": []
     }
     
     # Start background task
     background_tasks.add_task(
         run_tool_async,
-        AudioTranscriptionTool,
+        AudioTranscriptionCore,
         task_id,
         input_files,
         output_dir
@@ -490,7 +637,8 @@ async def transcribe_audio(
 async def convert_pptx(
     background_tasks: BackgroundTasks,
     output_format: str = Form(...),
-    files: List[UploadFile] = File(...)
+    files: List[UploadFile] = File(...),
+    token: str = Depends(verify_token)
 ):
     """Convert PPTX files to PDF or PNG"""
     if output_format not in ["pdf", "png"]:
@@ -538,7 +686,8 @@ async def convert_pptx(
 @app.post("/tts", response_model=TaskStatus)
 async def text_to_speech(
     background_tasks: BackgroundTasks,
-    files: List[UploadFile] = File(...)
+    files: List[UploadFile] = File(...),
+    token: str = Depends(verify_token)
 ):
     """Convert text files to speech"""
     task_id = create_task_id()
@@ -565,13 +714,14 @@ async def text_to_speech(
         "status": "pending",
         "temp_dir": temp_dir,
         "input_files": input_files,
-        "output_dir": output_dir
+        "output_dir": output_dir,
+        "messages": []
     }
     
     # Start background task
     background_tasks.add_task(
         run_tool_async,
-        TextToSpeechTool,
+        TextToSpeechCore,
         task_id,
         input_files,
         output_dir
@@ -584,7 +734,8 @@ async def merge_video(
     background_tasks: BackgroundTasks,
     duration_per_slide: Optional[float] = Form(3.0),
     files: List[UploadFile] = File(...),
-    audio_file: Optional[UploadFile] = File(None)
+    audio_file: Optional[UploadFile] = File(None),
+    token: str = Depends(verify_token)
 ):
     """Create video from images or merge video files"""
     task_id = create_task_id()
@@ -651,7 +802,7 @@ async def merge_video(
     return TaskStatus(task_id=task_id, status="pending")
 
 @app.get("/tasks/{task_id}", response_model=TaskStatus)
-async def get_task_status(task_id: str):
+async def get_task_status(task_id: str, token: str = Depends(verify_token)):
     """Get the status of a specific task"""
     if task_id not in active_tasks:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -666,7 +817,7 @@ async def get_task_status(task_id: str):
     )
 
 @app.get("/download/{task_id}")
-async def download_results(task_id: str):
+async def download_results(task_id: str, token: str = Depends(verify_token)):
     """Download the results of a completed task"""
     if task_id not in active_tasks:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -679,27 +830,59 @@ async def download_results(task_id: str):
     if not result_files:
         raise HTTPException(status_code=404, detail="No result files found")
     
+    logger.info(f"Download request for task {task_id}: {len(result_files)} files found")
+    logger.info(f"Result files: {result_files}")
+    
     # If single file, return it directly
     if len(result_files) == 1:
         file_path = Path(result_files[0])
-        if file_path.exists():
+        logger.info(f"Single file download: {file_path}")
+        logger.info(f"File exists: {file_path.exists()}")
+        logger.info(f"File size: {file_path.stat().st_size if file_path.exists() else 'N/A'} bytes")
+        logger.info(f"File absolute path: {file_path.absolute()}")
+        
+        if file_path.exists() and file_path.is_file():
+            # Determine media type based on file extension
+            media_type = 'application/octet-stream'
+            if file_path.suffix.lower() == '.pdf':
+                media_type = 'application/pdf'
+            elif file_path.suffix.lower() in ['.pptx', '.ppt']:
+                media_type = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+            elif file_path.suffix.lower() == '.txt':
+                media_type = 'text/plain'
+            elif file_path.suffix.lower() == '.mp3':
+                media_type = 'audio/mpeg'
+            elif file_path.suffix.lower() in ['.png', '.jpg', '.jpeg']:
+                media_type = f'image/{file_path.suffix.lower().lstrip(".")}'
+            
+            logger.info(f"Returning single file: {file_path.name} with media type: {media_type}")
             return FileResponse(
                 path=str(file_path),
                 filename=file_path.name,
-                media_type='application/octet-stream'
+                media_type=media_type
             )
+        else:
+            logger.error(f"Single file not found or not a file: {file_path}")
+            logger.error(f"Path exists: {file_path.exists()}, Is file: {file_path.is_file() if file_path.exists() else 'N/A'}")
+            # Fall through to ZIP creation to see if that works
     
     # Multiple files: create zip archive
+    logger.info(f"Creating ZIP archive for {len(result_files)} files")
     import zipfile
     import io
     
     zip_buffer = io.BytesIO()
+    files_added = 0
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
         for file_path_str in result_files:
             file_path = Path(file_path_str)
+            logger.info(f"Processing file for ZIP: {file_path}, exists: {file_path.exists()}")
             if file_path.exists() and file_path.is_file():
                 zip_file.write(file_path, file_path.name)
+                files_added += 1
+                logger.info(f"Added to ZIP: {file_path.name}")
     
+    logger.info(f"ZIP created with {files_added} files, buffer size: {zip_buffer.tell()} bytes")
     zip_buffer.seek(0)
     
     return StreamingResponse(
@@ -708,8 +891,48 @@ async def download_results(task_id: str):
         headers={"Content-Disposition": f"attachment; filename=results_{task_id}.zip"}
     )
 
+@app.get("/download/{task_id}/{file_index}")
+async def download_single_file(task_id: str, file_index: int, token: str = Depends(verify_token)):
+    """Download a specific file from a completed task by index"""
+    if task_id not in active_tasks:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    task = active_tasks[task_id]
+    if task["status"] != "completed":
+        raise HTTPException(status_code=400, detail="Task not completed")
+    
+    result_files = task.get("result_files", [])
+    if not result_files:
+        raise HTTPException(status_code=404, detail="No result files found")
+    
+    if file_index < 0 or file_index >= len(result_files):
+        raise HTTPException(status_code=400, detail=f"Invalid file index. Must be 0-{len(result_files)-1}")
+    
+    file_path = Path(result_files[file_index])
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    # Determine media type based on file extension
+    media_type = 'application/octet-stream'
+    if file_path.suffix.lower() == '.pdf':
+        media_type = 'application/pdf'
+    elif file_path.suffix.lower() in ['.pptx', '.ppt']:
+        media_type = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+    elif file_path.suffix.lower() == '.txt':
+        media_type = 'text/plain'
+    elif file_path.suffix.lower() == '.mp3':
+        media_type = 'audio/mpeg'
+    elif file_path.suffix.lower() in ['.png', '.jpg', '.jpeg']:
+        media_type = f'image/{file_path.suffix.lower().lstrip(".")}'
+    
+    return FileResponse(
+        path=str(file_path),
+        filename=file_path.name,
+        media_type=media_type
+    )
+
 @app.delete("/tasks/{task_id}")
-async def cleanup_task(task_id: str):
+async def cleanup_task(task_id: str, token: str = Depends(verify_token)):
     """Clean up a task and its temporary files"""
     if task_id not in active_tasks:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -725,7 +948,7 @@ async def cleanup_task(task_id: str):
     return {"message": f"Task {task_id} cleaned up successfully"}
 
 @app.get("/tasks")
-async def list_tasks():
+async def list_tasks(token: str = Depends(verify_token)):
     """List all active tasks"""
     return {
         "tasks": [

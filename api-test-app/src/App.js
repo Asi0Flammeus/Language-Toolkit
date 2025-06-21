@@ -28,14 +28,24 @@ const LANGUAGE_OPTIONS = {
 function App() {
   const [apiStatus, setApiStatus] = useState('checking');
   const [tasks, setTasks] = useState({});
+  const [authToken, setAuthToken] = useState('token_admin_abc123def456');
+  const [authStatus, setAuthStatus] = useState('unchecked');
 
-  // Check API health on component mount
+  // Check API health and auth on component mount
   useEffect(() => {
     checkApiHealth();
+    checkAuthentication();
     // Set up periodic task status checking
     const interval = setInterval(updateAllTaskStatuses, 2000);
     return () => clearInterval(interval);
   }, []);
+
+  // Check auth when token changes
+  useEffect(() => {
+    if (authToken) {
+      checkAuthentication();
+    }
+  }, [authToken]);
 
   const checkApiHealth = async () => {
     try {
@@ -47,9 +57,32 @@ function App() {
     }
   };
 
+  const checkAuthentication = async () => {
+    if (!authToken.trim()) {
+      setAuthStatus('missing');
+      return;
+    }
+    
+    try {
+      const response = await axios.get(`${API_BASE_URL}/tasks`, {
+        headers: {
+          'Authorization': `Bearer ${authToken}`
+        }
+      });
+      setAuthStatus('valid');
+    } catch (error) {
+      if (error.response?.status === 401) {
+        setAuthStatus('invalid');
+      } else {
+        setAuthStatus('error');
+      }
+      console.error('Authentication check failed:', error);
+    }
+  };
+
   const updateAllTaskStatuses = async () => {
     const taskIds = Object.keys(tasks);
-    if (taskIds.length === 0) return;
+    if (taskIds.length === 0 || !authToken) return;
 
     for (const taskId of taskIds) {
       if (tasks[taskId]?.status === 'completed' || tasks[taskId]?.status === 'failed') {
@@ -57,41 +90,94 @@ function App() {
       }
       
       try {
-        const response = await axios.get(`${API_BASE_URL}/tasks/${taskId}`);
+        console.log(`Checking status for task: ${taskId}`);
+        const response = await axios.get(`${API_BASE_URL}/tasks/${taskId}`, {
+          headers: {
+            'Authorization': `Bearer ${authToken}`
+          }
+        });
+        console.log(`Task ${taskId} status response:`, response.data);
         setTasks(prev => ({
           ...prev,
           [taskId]: response.data
         }));
       } catch (error) {
         console.error(`Error updating task ${taskId}:`, error);
+        if (error.response?.status === 404) {
+          // Task not found, mark as failed
+          setTasks(prev => ({
+            ...prev,
+            [taskId]: { ...prev[taskId], status: 'failed', error: 'Task not found on server' }
+          }));
+        }
       }
     }
   };
 
-  const downloadResults = async (taskId) => {
+  const downloadResults = async (taskId, fileIndex = null) => {
     try {
-      const response = await axios.get(`${API_BASE_URL}/download/${taskId}`, {
-        responseType: 'blob'
+      console.log(`Starting download for task ${taskId}${fileIndex !== null ? `, file ${fileIndex}` : ''}`);
+      
+      const url = fileIndex !== null 
+        ? `${API_BASE_URL}/download/${taskId}/${fileIndex}`
+        : `${API_BASE_URL}/download/${taskId}`;
+        
+      const response = await axios.get(url, {
+        responseType: 'blob',
+        headers: {
+          'Authorization': `Bearer ${authToken}`
+        }
       });
       
+      console.log('Download response:', response);
+      
+      if (response.data.size === 0) {
+        alert('Download failed: No data received');
+        return;
+      }
+      
       const blob = new Blob([response.data]);
-      const url = window.URL.createObjectURL(blob);
+      const downloadUrl = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
-      link.href = url;
-      link.download = `results_${taskId}.zip`;
+      link.href = downloadUrl;
+      
+      // Try to get filename from response headers
+      const contentDisposition = response.headers['content-disposition'];
+      let filename = `results_${taskId}${fileIndex !== null ? `_file_${fileIndex}` : ''}.zip`;
+      if (contentDisposition) {
+        const filenameMatch = contentDisposition.match(/filename="(.+)"/);
+        if (filenameMatch) {
+          filename = filenameMatch[1];
+        }
+      }
+      
+      link.download = filename;
       document.body.appendChild(link);
       link.click();
-      window.URL.revokeObjectURL(url);
+      window.URL.revokeObjectURL(downloadUrl);
       document.body.removeChild(link);
+      
+      console.log(`Download completed: ${filename}`);
+      alert(`✅ Download completed: ${filename}`);
     } catch (error) {
       console.error('Download failed:', error);
-      alert('Download failed: ' + error.message);
+      if (error.response?.status === 404) {
+        alert('Download failed: Results not found. The task may still be processing or may have failed.');
+      } else if (error.response?.status === 401) {
+        alert('Download failed: Authentication required. Please check your token.');
+      } else {
+        alert('Download failed: ' + (error.response?.data?.detail || error.message));
+      }
     }
   };
 
   const cleanupTask = async (taskId) => {
     try {
-      await axios.delete(`${API_BASE_URL}/tasks/${taskId}`);
+      await axios.delete(`${API_BASE_URL}/tasks/${taskId}`, {
+        headers: {
+          'Authorization': `Bearer ${authToken}`
+        }
+      });
       setTasks(prev => {
         const newTasks = { ...prev };
         delete newTasks[taskId];
@@ -109,6 +195,35 @@ function App() {
         <div className="header">
           <h1>🛠️ Language Toolkit API Tester</h1>
           <p>Test all endpoints of the Language Toolkit API</p>
+          
+          <div className="auth-section">
+            <div className="form-group">
+              <label>🔐 Authentication Token:</label>
+              <div style={{display: 'flex', gap: '10px', alignItems: 'center'}}>
+                <input
+                  type="text"
+                  value={authToken}
+                  onChange={(e) => setAuthToken(e.target.value)}
+                  placeholder="Enter your Bearer token"
+                  style={{flex: 1, fontFamily: 'monospace', fontSize: '12px'}}
+                />
+                <button className="btn btn-secondary" onClick={checkAuthentication}>
+                  Test Auth
+                </button>
+              </div>
+              <div style={{marginTop: '5px'}}>
+                Auth Status: 
+                <span className={`status-badge status-${authStatus}`}>
+                  {authStatus === 'unchecked' && '❓ Unchecked'}
+                  {authStatus === 'valid' && '✅ Valid'}
+                  {authStatus === 'invalid' && '❌ Invalid Token'}
+                  {authStatus === 'missing' && '⚠️ Missing Token'}
+                  {authStatus === 'error' && '🔥 Error'}
+                </span>
+              </div>
+            </div>
+          </div>
+          
           <div>
             API Status: 
             <span className={`status-badge status-${apiStatus}`}>
@@ -122,17 +237,18 @@ function App() {
         </div>
 
         <div className="grid">
-          <PPTXTranslationTester tasks={tasks} setTasks={setTasks} />
-          <TextTranslationTester tasks={tasks} setTasks={setTasks} />
-          <AudioTranscriptionTester tasks={tasks} setTasks={setTasks} />
-          <PPTXConversionTester tasks={tasks} setTasks={setTasks} />
-          <TextToSpeechTester tasks={tasks} setTasks={setTasks} />
+          <PPTXTranslationTester tasks={tasks} setTasks={setTasks} authToken={authToken} />
+          <TextTranslationTester tasks={tasks} setTasks={setTasks} authToken={authToken} />
+          <AudioTranscriptionTester tasks={tasks} setTasks={setTasks} authToken={authToken} />
+          <PPTXConversionTester tasks={tasks} setTasks={setTasks} authToken={authToken} />
+          <TextToSpeechTester tasks={tasks} setTasks={setTasks} authToken={authToken} />
         </div>
 
         <TaskManager 
           tasks={tasks} 
           onDownload={downloadResults}
           onCleanup={cleanupTask}
+          onRefresh={updateAllTaskStatuses}
         />
       </div>
     </div>
@@ -140,7 +256,7 @@ function App() {
 }
 
 // PPTX Translation Component
-function PPTXTranslationTester({ tasks, setTasks }) {
+function PPTXTranslationTester({ tasks, setTasks, authToken }) {
   const [files, setFiles] = useState([]);
   const [sourceLang, setSourceLang] = useState('en');
   const [targetLang, setTargetLang] = useState('fr');
@@ -150,6 +266,11 @@ function PPTXTranslationTester({ tasks, setTasks }) {
     e.preventDefault();
     if (files.length === 0) {
       alert('Please select PPTX files');
+      return;
+    }
+
+    if (!authToken) {
+      alert('Please enter an authentication token');
       return;
     }
 
@@ -164,7 +285,10 @@ function PPTXTranslationTester({ tasks, setTasks }) {
 
     try {
       const response = await axios.post(`${API_BASE_URL}/translate/pptx`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
+        headers: { 
+          'Content-Type': 'multipart/form-data',
+          'Authorization': `Bearer ${authToken}`
+        }
       });
       
       setTasks(prev => ({
@@ -221,7 +345,7 @@ function PPTXTranslationTester({ tasks, setTasks }) {
 }
 
 // Text Translation Component
-function TextTranslationTester({ tasks, setTasks }) {
+function TextTranslationTester({ tasks, setTasks, authToken }) {
   const [files, setFiles] = useState([]);
   const [sourceLang, setSourceLang] = useState('en');
   const [targetLang, setTargetLang] = useState('fr');
@@ -231,6 +355,11 @@ function TextTranslationTester({ tasks, setTasks }) {
     e.preventDefault();
     if (files.length === 0) {
       alert('Please select TXT files');
+      return;
+    }
+
+    if (!authToken) {
+      alert('Please enter an authentication token');
       return;
     }
 
@@ -245,7 +374,10 @@ function TextTranslationTester({ tasks, setTasks }) {
 
     try {
       const response = await axios.post(`${API_BASE_URL}/translate/text`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
+        headers: { 
+          'Content-Type': 'multipart/form-data',
+          'Authorization': `Bearer ${authToken}`
+        }
       });
       
       setTasks(prev => ({
@@ -302,7 +434,7 @@ function TextTranslationTester({ tasks, setTasks }) {
 }
 
 // Audio Transcription Component
-function AudioTranscriptionTester({ tasks, setTasks }) {
+function AudioTranscriptionTester({ tasks, setTasks, authToken }) {
   const [files, setFiles] = useState([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -310,6 +442,11 @@ function AudioTranscriptionTester({ tasks, setTasks }) {
     e.preventDefault();
     if (files.length === 0) {
       alert('Please select audio files');
+      return;
+    }
+
+    if (!authToken) {
+      alert('Please enter an authentication token');
       return;
     }
 
@@ -322,7 +459,10 @@ function AudioTranscriptionTester({ tasks, setTasks }) {
 
     try {
       const response = await axios.post(`${API_BASE_URL}/transcribe/audio`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
+        headers: { 
+          'Content-Type': 'multipart/form-data',
+          'Authorization': `Bearer ${authToken}`
+        }
       });
       
       setTasks(prev => ({
@@ -361,7 +501,7 @@ function AudioTranscriptionTester({ tasks, setTasks }) {
 }
 
 // PPTX Conversion Component
-function PPTXConversionTester({ tasks, setTasks }) {
+function PPTXConversionTester({ tasks, setTasks, authToken }) {
   const [files, setFiles] = useState([]);
   const [outputFormat, setOutputFormat] = useState('pdf');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -370,6 +510,11 @@ function PPTXConversionTester({ tasks, setTasks }) {
     e.preventDefault();
     if (files.length === 0) {
       alert('Please select PPTX files');
+      return;
+    }
+
+    if (!authToken) {
+      alert('Please enter an authentication token');
       return;
     }
 
@@ -383,7 +528,10 @@ function PPTXConversionTester({ tasks, setTasks }) {
 
     try {
       const response = await axios.post(`${API_BASE_URL}/convert/pptx`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
+        headers: { 
+          'Content-Type': 'multipart/form-data',
+          'Authorization': `Bearer ${authToken}`
+        }
       });
       
       setTasks(prev => ({
@@ -430,7 +578,7 @@ function PPTXConversionTester({ tasks, setTasks }) {
 }
 
 // Text to Speech Component
-function TextToSpeechTester({ tasks, setTasks }) {
+function TextToSpeechTester({ tasks, setTasks, authToken }) {
   const [files, setFiles] = useState([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -438,6 +586,11 @@ function TextToSpeechTester({ tasks, setTasks }) {
     e.preventDefault();
     if (files.length === 0) {
       alert('Please select TXT files');
+      return;
+    }
+
+    if (!authToken) {
+      alert('Please enter an authentication token');
       return;
     }
 
@@ -450,7 +603,10 @@ function TextToSpeechTester({ tasks, setTasks }) {
 
     try {
       const response = await axios.post(`${API_BASE_URL}/tts`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
+        headers: { 
+          'Content-Type': 'multipart/form-data',
+          'Authorization': `Bearer ${authToken}`
+        }
       });
       
       setTasks(prev => ({
@@ -571,7 +727,7 @@ function FileUploader({ files, setFiles, accept, multiple, label }) {
 }
 
 // Task Manager Component
-function TaskManager({ tasks, onDownload, onCleanup }) {
+function TaskManager({ tasks, onDownload, onCleanup, onRefresh }) {
   const taskArray = Object.entries(tasks);
 
   if (taskArray.length === 0) {
@@ -586,10 +742,19 @@ function TaskManager({ tasks, onDownload, onCleanup }) {
   return (
     <div className="api-section">
       <h2>📋 Task Manager</h2>
+      {taskArray.length > 0 && (
+        <button 
+          className="btn btn-secondary" 
+          onClick={onRefresh}
+          style={{marginBottom: '15px'}}
+        >
+          🔄 Refresh Task Status
+        </button>
+      )}
       {taskArray.map(([taskId, task]) => (
         <div key={taskId} className="task-status">
           <h4>Task: {taskId.substring(0, 8)}...</h4>
-          <div>
+          <div style={{marginBottom: '10px'}}>
             <span className={`status-badge status-${task.status}`}>
               {task.status === 'running' && <span className="loading-spinner"></span>}
               {task.status}
@@ -598,6 +763,7 @@ function TaskManager({ tasks, onDownload, onCleanup }) {
               <button 
                 className="btn btn-success" 
                 onClick={() => onDownload(taskId)}
+                style={{marginLeft: '10px'}}
               >
                 📥 Download Results
               </button>
@@ -605,10 +771,28 @@ function TaskManager({ tasks, onDownload, onCleanup }) {
             <button 
               className="btn btn-danger" 
               onClick={() => onCleanup(taskId)}
+              style={{marginLeft: '10px'}}
             >
               🗑️ Cleanup
             </button>
           </div>
+          
+          {/* Debug: Show raw task data */}
+          <details style={{marginBottom: '10px', fontSize: '12px'}}>
+            <summary>🔍 Debug Info</summary>
+            <div style={{background: '#f8f9fa', padding: '5px', borderRadius: '3px', overflow: 'auto'}}>
+              <div><strong>Status:</strong> {task.status}</div>
+              <div><strong>Result files count:</strong> {task.result_files ? task.result_files.length : 0}</div>
+              <div><strong>Result files:</strong></div>
+              <pre style={{fontSize: '10px', margin: '5px 0'}}>
+                {JSON.stringify(task.result_files, null, 2)}
+              </pre>
+              <div><strong>Full task data:</strong></div>
+              <pre style={{fontSize: '10px', margin: '5px 0'}}>
+                {JSON.stringify(task, null, 2)}
+              </pre>
+            </div>
+          </details>
           
           {task.progress && (
             <div className="progress-log">
@@ -617,14 +801,49 @@ function TaskManager({ tasks, onDownload, onCleanup }) {
           )}
           
           {task.error && (
-            <div className="error">
+            <div className="error" style={{color: 'red', background: '#ffe6e6', padding: '5px', borderRadius: '3px'}}>
               Error: {task.error}
             </div>
           )}
           
           {task.result_files && task.result_files.length > 0 && (
-            <div className="success">
+            <div className="success" style={{color: 'green', background: '#e6ffe6', padding: '5px', borderRadius: '3px'}}>
               ✅ {task.result_files.length} result file(s) ready for download
+              
+              {task.result_files.length === 1 ? (
+                // Single file - show simplified display
+                <div style={{margin: '5px 0'}}>
+                  <strong>{task.result_files[0].split('/').pop()}</strong>
+                </div>
+              ) : (
+                // Multiple files - show list with individual download buttons
+                <ul style={{margin: '5px 0', paddingLeft: '20px', listStyle: 'none'}}>
+                  {task.result_files.map((file, index) => (
+                    <li key={index} style={{fontSize: '11px', fontFamily: 'monospace', marginBottom: '5px', display: 'flex', alignItems: 'center', justifyContent: 'space-between'}}>
+                      <span>{file.split('/').pop()}</span>
+                      <button 
+                        className="btn btn-success" 
+                        onClick={() => onDownload(taskId, index)}
+                        style={{padding: '2px 6px', fontSize: '10px', marginLeft: '10px'}}
+                      >
+                        📥 Download
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              
+              {task.result_files.length > 1 && (
+                <div style={{marginTop: '10px', textAlign: 'center'}}>
+                  <button 
+                    className="btn btn-success" 
+                    onClick={() => onDownload(taskId)}
+                    style={{fontSize: '12px'}}
+                  >
+                    📦 Download All as ZIP
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -30,7 +30,8 @@ import deepl
 from pathlib import Path
 from typing import Dict, Any, Optional, Callable
 from pptx import Presentation
-import fitz
+from pptx.dml.color import RGBColor
+from pptx.enum.dml import MSO_THEME_COLOR, MSO_COLOR_TYPE
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +93,7 @@ class PPTXTranslationCore:
     def translate_pptx(self, input_path: Path, output_path: Path, 
                       source_lang: str, target_lang: str) -> bool:
         """
-        Translate PPTX file from source to target language.
+        Translate PPTX file from source to target language with full formatting preservation.
         
         Args:
             input_path: Path to input PPTX file
@@ -112,29 +113,160 @@ class PPTXTranslationCore:
             slide_count = len(prs.slides)
             self.progress_callback(f"Found {slide_count} slides to translate")
             
-            # Process each slide
-            for slide_num, slide in enumerate(prs.slides, 1):
-                self.progress_callback(f"Processing slide {slide_num}/{slide_count}")
+            # Track translation progress
+            total_shapes = sum(len(slide.shapes) for slide in prs.slides)
+            processed_shapes = 0
+            
+            # Translate each shape with text
+            for slide_idx, slide in enumerate(prs.slides):
+                self.progress_callback(f"Processing Slide {slide_idx + 1}/{len(prs.slides)}")
                 
-                # Translate text in shapes
-                for shape in slide.shapes:
-                    if hasattr(shape, "text") and shape.text.strip():
-                        original_text = shape.text
-                        try:
-                            translated_text = self._translate_text(original_text, source_lang, target_lang)
-                            shape.text = translated_text
-                            self.progress_callback(f"Translated text on slide {slide_num}")
-                        except Exception as e:
-                            logger.warning(f"Failed to translate text on slide {slide_num}: {e}")
-                            continue
-                    
-                    # Handle text in tables
-                    if shape.has_table:
-                        self._translate_table(shape.table, source_lang, target_lang, slide_num)
-                    
-                    # Handle text in text frames
-                    if hasattr(shape, "text_frame") and shape.text_frame:
-                        self._translate_text_frame(shape.text_frame, source_lang, target_lang, slide_num)
+                for shape_idx, shape in enumerate(slide.shapes):
+                    # Check if shape has a text frame and text
+                    if not shape.has_text_frame or not shape.text_frame.text.strip():
+                        processed_shapes += 1
+                        continue # Skip shapes without text
+
+                    try:
+                        text_frame = shape.text_frame
+                        original_paras_data = []
+
+                        # Store original formatting for each paragraph and run
+                        for para in text_frame.paragraphs:
+                            para_data = {
+                                'text': para.text,
+                                'alignment': para.alignment,
+                                'level': para.level,
+                                'line_spacing': para.line_spacing,
+                                'space_before': para.space_before,
+                                'space_after': para.space_after,
+                                'runs': []
+                            }
+
+                            for run in para.runs:
+                                font = run.font
+                                color_info = None
+                                if font.color and hasattr(font.color, 'type'): 
+                                    if font.color.type == MSO_COLOR_TYPE.RGB:
+                                        color_info = ('rgb', font.color.rgb)
+                                    elif font.color.type == MSO_COLOR_TYPE.SCHEME:
+                                        color_info = ('scheme', font.color.theme_color, getattr(font.color, 'brightness', 0.0))
+
+                                run_data = {
+                                    'text': run.text, 
+                                    'font_name': font.name,
+                                    'size': font.size,
+                                    'bold': font.bold,
+                                    'italic': font.italic,
+                                    'underline': font.underline,
+                                    'color_info': color_info,
+                                    'language': getattr(font, 'language_id', None)
+                                }
+                                para_data['runs'].append(run_data)
+                            original_paras_data.append(para_data)
+
+                        # Translate the text
+                        original_full_text = text_frame.text
+                        if not original_full_text.strip():
+                             processed_shapes += 1
+                             continue # Skip if effectively empty after stripping
+
+                        translated_text_obj = self.translator.translate_text(
+                            original_full_text,
+                            source_lang=source_lang,
+                            target_lang=target_lang
+                        )
+                        translated_full_text = translated_text_obj.text
+
+                        text_frame.clear() # Clear existing content
+
+                        # Reconstruct text with original formatting
+                        translated_paras = translated_full_text.split('\n')
+                        num_orig_paras = len(original_paras_data)
+                        num_trans_paras = len(translated_paras)
+
+                        for i, trans_para_text in enumerate(translated_paras):
+                            # Determine which original paragraph's style to mimic
+                            orig_para_idx = min(i, num_orig_paras - 1)
+                            orig_para_data = original_paras_data[orig_para_idx]
+
+                            # Add paragraph (first one exists, add subsequent ones)
+                            if i == 0:
+                                p = text_frame.paragraphs[0]
+                                p.text = '' # Clear any default text in the first paragraph
+                            else:
+                                p = text_frame.add_paragraph()
+
+                            # Apply paragraph formatting
+                            p.alignment = orig_para_data['alignment']
+                            p.level = orig_para_data['level']
+                            if orig_para_data['line_spacing']: p.line_spacing = orig_para_data['line_spacing']
+                            if orig_para_data['space_before']: p.space_before = orig_para_data['space_before']
+                            if orig_para_data['space_after']: p.space_after = orig_para_data['space_after']
+
+                            # Apply run formatting - Distribute text and styles
+                            orig_runs_data = orig_para_data['runs']
+                            num_orig_runs = len(orig_runs_data)
+
+                            if not orig_runs_data: # If original paragraph had no runs (e.g., empty)
+                                p.text = trans_para_text # Just add the text
+                                continue
+
+                            # Simple distribution: Apply styles run-by-run, splitting translated text
+                            words = trans_para_text.split()
+                            total_words = len(words)
+                            start_idx = 0
+
+                            for j, run_data in enumerate(orig_runs_data):
+                                words_for_this_run = total_words // num_orig_runs
+                                if j < total_words % num_orig_runs:
+                                    words_for_this_run += 1
+
+                                end_idx = start_idx + words_for_this_run
+                                run_text = ' '.join(words[start_idx:end_idx])
+                                start_idx = end_idx
+
+                                if not run_text and j < num_orig_runs -1 : # Avoid adding empty runs unless it's the last one potentially
+                                    continue
+
+                                run = p.add_run()
+                                run.text = run_text + (' ' if j < num_orig_runs - 1 and run_text else '') # Add space between runs
+
+                                # Apply run formatting
+                                font = run.font
+                                if run_data['font_name']: font.name = run_data['font_name']
+                                if run_data['size']: font.size = run_data['size']
+                                # Explicitly set False if stored as False
+                                font.bold = run_data['bold'] if run_data['bold'] is not None else None
+                                font.italic = run_data['italic'] if run_data['italic'] is not None else None
+                                font.underline = run_data['underline'] if run_data['underline'] is not None else None # Check underline type if needed
+
+                                stored_color_info = run_data['color_info']
+                                if stored_color_info:
+                                    color_type, value1, *rest = stored_color_info
+                                    if color_type == 'rgb':
+                                        try:
+                                            font.color.rgb = RGBColor(*value1) # Pass tuple elements to RGBColor
+                                        except Exception as color_e:
+                                            self.progress_callback(f"Warn: Failed to set RGB color {value1}: {color_e}")
+                                    elif color_type == 'scheme':
+                                        try:
+                                            font.color.theme_color = value1
+                                            if rest: # Brightness was stored
+                                                font.color.brightness = rest[0]
+                                        except Exception as color_e:
+                                             self.progress_callback(f"Warn: Failed to set theme color {value1}: {color_e}")
+
+                                if run_data['language']: font.language_id = run_data['language']
+
+                    except Exception as e:
+                        self.progress_callback(f"Error translating shape {shape_idx+1} on slide {slide_idx+1}: {e}")
+                        logger.warning(f"Error translating shape {shape_idx+1} on slide {slide_idx+1} in {input_path.name}: {e}", exc_info=True)
+
+                    processed_shapes += 1
+                    if total_shapes > 0 and processed_shapes % 5 == 0: # Update progress more frequently
+                        progress = (processed_shapes / total_shapes) * 100
+                        self.progress_callback(f"Translation progress: {progress:.1f}% ({processed_shapes}/{total_shapes} shapes)")
             
             # Save translated presentation
             self.progress_callback(f"Saving translated presentation to: {output_path}")
@@ -164,30 +296,6 @@ class PPTXTranslationCore:
         except Exception as e:
             logger.warning(f"Translation failed for text: {text[:50]}... Error: {e}")
             return text  # Return original text if translation fails
-    
-    def _translate_table(self, table, source_lang: str, target_lang: str, slide_num: int):
-        """Translate text in table cells."""
-        try:
-            for row in table.rows:
-                for cell in row.cells:
-                    if cell.text.strip():
-                        original_text = cell.text
-                        translated_text = self._translate_text(original_text, source_lang, target_lang)
-                        cell.text = translated_text
-        except Exception as e:
-            logger.warning(f"Failed to translate table on slide {slide_num}: {e}")
-    
-    def _translate_text_frame(self, text_frame, source_lang: str, target_lang: str, slide_num: int):
-        """Translate text in text frame paragraphs."""
-        try:
-            for paragraph in text_frame.paragraphs:
-                for run in paragraph.runs:
-                    if run.text.strip():
-                        original_text = run.text
-                        translated_text = self._translate_text(original_text, source_lang, target_lang)
-                        run.text = translated_text
-        except Exception as e:
-            logger.warning(f"Failed to translate text frame on slide {slide_num}: {e}")
     
     def validate_file(self, file_path: Path) -> bool:
         """Validate that the file is a valid PPTX file."""

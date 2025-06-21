@@ -5,9 +5,13 @@
 
 API_BASE="http://localhost:8000"
 TEST_FILES_DIR="./test-app"
+AUTH_TOKEN="token_admin_abc123def456"  # Authentication token from auth_tokens.json
 
 echo "🧪 Language Toolkit API Test Suite"
 echo "=================================="
+echo "🔐 Authentication: Using token $AUTH_TOKEN"
+echo "   (Update AUTH_TOKEN variable if you have a different token)"
+echo ""
 
 # Check if API is running
 echo "📡 Checking API health..."
@@ -33,6 +37,7 @@ echo ""
 
 echo "1️⃣  Test PPTX Translation (EN -> FR):"
 echo "curl -X POST \"$API_BASE/translate/pptx\" \\"
+echo "  -H \"Authorization: Bearer \$AUTH_TOKEN\" \\"
 echo "  -F \"source_lang=en\" \\"
 echo "  -F \"target_lang=fr\" \\"
 echo "  -F \"files=@$TEST_FILES_DIR/ECO102-FR-V001-2.1.pptx\""
@@ -40,6 +45,7 @@ echo ""
 
 echo "2️⃣  Test Text Translation (EN -> FR):"
 echo "curl -X POST \"$API_BASE/translate/text\" \\"
+echo "  -H \"Authorization: Bearer \$AUTH_TOKEN\" \\"
 echo "  -F \"source_lang=en\" \\"
 echo "  -F \"target_lang=fr\" \\"
 echo "  -F \"files=@$TEST_FILES_DIR/btc204/00.txt\""
@@ -47,34 +53,37 @@ echo ""
 
 echo "3️⃣  Test Audio Transcription:"
 echo "curl -X POST \"$API_BASE/transcribe/audio\" \\"
+echo "  -H \"Authorization: Bearer \$AUTH_TOKEN\" \\"
 echo "  -F \"files=@$TEST_FILES_DIR/btc204/00.mp3\""
 echo ""
 
 echo "4️⃣  Test PPTX to PDF Conversion:"
 echo "curl -X POST \"$API_BASE/convert/pptx\" \\"
+echo "  -H \"Authorization: Bearer \$AUTH_TOKEN\" \\"
 echo "  -F \"output_format=pdf\" \\"
 echo "  -F \"files=@$TEST_FILES_DIR/ECO102-FR-V001-2.1.pptx\""
 echo ""
 
 echo "5️⃣  Test Text-to-Speech:"
 echo "curl -X POST \"$API_BASE/tts\" \\"
+echo "  -H \"Authorization: Bearer \$AUTH_TOKEN\" \\"
 echo "  -F \"files=@$TEST_FILES_DIR/test_Loic.txt\""
 echo ""
 
 echo "6️⃣  Check task status (replace TASK_ID):"
-echo "curl \"$API_BASE/tasks/TASK_ID\""
+echo "curl -H \"Authorization: Bearer \$AUTH_TOKEN\" \"$API_BASE/tasks/TASK_ID\""
 echo ""
 
 echo "7️⃣  Download results (replace TASK_ID):"
-echo "curl -O \"$API_BASE/download/TASK_ID\""
+echo "curl -H \"Authorization: Bearer \$AUTH_TOKEN\" -O \"$API_BASE/download/TASK_ID\""
 echo ""
 
 echo "8️⃣  List all tasks:"
-echo "curl \"$API_BASE/tasks\""
+echo "curl -H \"Authorization: Bearer \$AUTH_TOKEN\" \"$API_BASE/tasks\""
 echo ""
 
 echo "9️⃣  Cleanup task (replace TASK_ID):"
-echo "curl -X DELETE \"$API_BASE/tasks/TASK_ID\""
+echo "curl -H \"Authorization: Bearer \$AUTH_TOKEN\" -X DELETE \"$API_BASE/tasks/TASK_ID\""
 echo ""
 
 # Interactive mode
@@ -98,6 +107,7 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
         1)
             echo "🔄 Testing PPTX Translation..."
             RESPONSE=$(curl -s -X POST "$API_BASE/translate/pptx" \
+                -H "Authorization: Bearer $AUTH_TOKEN" \
                 -F "source_lang=en" \
                 -F "target_lang=fr" \
                 -F "files=@$TEST_FILES_DIR/ECO102-FR-V001-2.1.pptx")
@@ -109,12 +119,13 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
                 echo "✅ Task created with ID: $TASK_ID"
                 echo "⏳ Checking task status..."
                 sleep 2
-                curl -s "$API_BASE/tasks/$TASK_ID" | jq '.' 2>/dev/null || echo "Task status check completed"
+                curl -s -H "Authorization: Bearer $AUTH_TOKEN" "$API_BASE/tasks/$TASK_ID" | jq '.' 2>/dev/null || echo "Task status check completed"
             fi
             ;;
         2)
             echo "🔄 Testing Text Translation..."
             RESPONSE=$(curl -s -X POST "$API_BASE/translate/text" \
+                -H "Authorization: Bearer $AUTH_TOKEN" \
                 -F "source_lang=en" \
                 -F "target_lang=fr" \
                 -F "files=@$TEST_FILES_DIR/btc204/00.txt")
@@ -123,19 +134,21 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
         3)
             echo "🔄 Testing Audio Transcription..."
             RESPONSE=$(curl -s -X POST "$API_BASE/transcribe/audio" \
+                -H "Authorization: Bearer $AUTH_TOKEN" \
                 -F "files=@$TEST_FILES_DIR/btc204/00.mp3")
             echo "Response: $RESPONSE"
             ;;
         4)
             echo "🔄 Testing PPTX Conversion..."
             RESPONSE=$(curl -s -X POST "$API_BASE/convert/pptx" \
+                -H "Authorization: Bearer $AUTH_TOKEN" \
                 -F "output_format=pdf" \
                 -F "files=@$TEST_FILES_DIR/ECO102-FR-V001-2.1.pptx")
             echo "Response: $RESPONSE"
             ;;
         5)
             echo "📋 Listing all tasks..."
-            curl -s "$API_BASE/tasks" | jq '.' 2>/dev/null || curl -s "$API_BASE/tasks"
+            curl -s -H "Authorization: Bearer $AUTH_TOKEN" "$API_BASE/tasks" | jq '.' 2>/dev/null || curl -s -H "Authorization: Bearer $AUTH_TOKEN" "$API_BASE/tasks"
             ;;
         *)
             echo "Invalid choice"

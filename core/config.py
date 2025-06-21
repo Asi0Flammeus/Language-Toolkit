@@ -29,7 +29,7 @@ class ConfigManager:
     
     This class provides a centralized way to handle application configuration,
     including API keys, supported languages, and user preferences. Configuration
-    is stored in JSON format in the user's Documents directory.
+    is stored in JSON format in the user's Documents directory or project directory.
     
     Key Features:
         - Automatic configuration directory creation
@@ -37,20 +37,27 @@ class ConfigManager:
         - API key secure storage and retrieval
         - Language configuration management
         - Cross-platform compatibility
+        - Project-local API key support
     
     Configuration Location:
-        ~/Documents/Language Toolkit/config.json
+        ~/Documents/Language Toolkit/config.json (default)
+        ./api_keys.json (project-local for API keys)
     
     Example Usage:
         config = ConfigManager()
         api_keys = config.get_api_keys()
         languages = config.get_languages()
         config.save_api_keys({"deepl": "your-key", "openai": "your-key"})
+        
+        # For project-local API keys
+        config = ConfigManager(use_project_api_keys=True)
     """
     
-    def __init__(self):
+    def __init__(self, use_project_api_keys: bool = False):
         self.config = {}
+        self.use_project_api_keys = use_project_api_keys
         self.config_file = Path.home() / "Documents" / "Language Toolkit" / "config.json"
+        self.project_api_keys_file = Path(__file__).parent.parent / "api_keys.json"
         self.config_file.parent.mkdir(parents=True, exist_ok=True)
         self.load_config()
         
@@ -115,6 +122,20 @@ class ConfigManager:
     
     def get_api_keys(self) -> Dict[str, str]:
         """Get stored API keys."""
+        if self.use_project_api_keys:
+            # Load API keys from project-local file
+            try:
+                if self.project_api_keys_file.exists():
+                    with open(self.project_api_keys_file, 'r', encoding='utf-8') as f:
+                        project_keys = json.load(f)
+                    logger.info(f"Loaded API keys from {self.project_api_keys_file}")
+                    return project_keys
+                else:
+                    logger.warning(f"Project API keys file not found: {self.project_api_keys_file}")
+                    return {}
+            except Exception as e:
+                logger.error(f"Failed to load project API keys: {e}")
+                return {}
         return self.config.get("api_keys", {})
     
     def save_api_keys(self, api_keys: Dict[str, str]):

@@ -4,12 +4,14 @@ A REST API for the Language Toolkit providing document processing, translation, 
 
 ## Features
 
-- **PPTX Translation**: Translate PowerPoint presentations between languages
+- **Advanced PPTX Translation**: Translate PowerPoint presentations with **full formatting preservation** - fonts, colors, styles, typography
 - **Text Translation**: Translate text files using DeepL API
 - **Audio Transcription**: Convert audio files to text using OpenAI Whisper
 - **PPTX Conversion**: Convert PowerPoint files to PDF or PNG images
 - **Text-to-Speech**: Generate audio from text files using ElevenLabs
 - **Video Merging**: Combine audio and images into videos
+- **Smart Downloads**: Single files download directly, multiple files as ZIP
+- **Individual File Downloads**: Download specific files from multi-file results
 - **Asynchronous Processing**: Handle long-running tasks with progress tracking
 
 ## Installation
@@ -119,7 +121,11 @@ curl "http://localhost:8000/tasks/{task_id}"
 
 3. **Download results**:
 ```bash
+# Download all results (single file directly, multiple files as ZIP)
 curl -O "http://localhost:8000/download/{task_id}"
+
+# Download specific file by index (0-based)
+curl -O "http://localhost:8000/download/{task_id}/0"
 ```
 
 ### Using Python requests
@@ -149,6 +155,25 @@ if status_response.json()['status'] == 'completed':
     with open('result.zip', 'wb') as f:
         f.write(download_response.content)
 ```
+
+## Advanced PPTX Translation
+
+The API provides **professional-grade PPTX translation** that preserves all formatting:
+
+### ✅ **Complete Formatting Preservation**
+- **Fonts**: Names, sizes, styles maintained
+- **Colors**: RGB and theme colors preserved  
+- **Typography**: Bold, italic, underline styles
+- **Layout**: Paragraph spacing, alignment, indentation
+- **Structure**: Text frames, runs, paragraph levels
+
+### 🎯 **Same Quality as GUI App**
+The API uses the same advanced translation engine as the desktop application, ensuring identical results between interfaces.
+
+### 📊 **Professional Results**
+- Maintains original presentation design
+- Preserves corporate branding and styling
+- Ready for professional use without reformatting
 
 ## Task Management
 
