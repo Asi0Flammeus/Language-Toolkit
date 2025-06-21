@@ -143,11 +143,35 @@ function App() {
       
       // Try to get filename from response headers
       const contentDisposition = response.headers['content-disposition'];
-      let filename = `results_${taskId}${fileIndex !== null ? `_file_${fileIndex}` : ''}.zip`;
+      const contentType = response.headers['content-type'] || '';
+      
+      let filename = `results_${taskId}${fileIndex !== null ? `_file_${fileIndex}` : ''}`;
+      
+      // First try to get filename from Content-Disposition header
       if (contentDisposition) {
         const filenameMatch = contentDisposition.match(/filename="(.+)"/);
         if (filenameMatch) {
           filename = filenameMatch[1];
+        }
+      } else {
+        // If no Content-Disposition, determine extension from Content-Type
+        if (contentType.includes('application/vnd.openxmlformats-officedocument.presentationml.presentation')) {
+          filename += '.pptx';
+        } else if (contentType.includes('application/pdf')) {
+          filename += '.pdf';
+        } else if (contentType.includes('text/plain')) {
+          filename += '.txt';
+        } else if (contentType.includes('audio/mpeg')) {
+          filename += '.mp3';
+        } else if (contentType.includes('image/png')) {
+          filename += '.png';
+        } else if (contentType.includes('image/jpeg')) {
+          filename += '.jpg';
+        } else if (contentType.includes('application/zip')) {
+          filename += '.zip';
+        } else {
+          // Default to zip if unknown
+          filename += '.zip';
         }
       }
       
@@ -158,7 +182,32 @@ function App() {
       document.body.removeChild(link);
       
       console.log(`Download completed: ${filename}`);
-      alert(`✅ Download completed: ${filename}`);
+      
+      // Show file type specific success message
+      let fileTypeEmoji = "📄";
+      let fileTypeDesc = "file";
+      
+      if (contentType.includes('application/vnd.openxmlformats-officedocument.presentationml.presentation')) {
+        fileTypeEmoji = "📊";
+        fileTypeDesc = "PPTX presentation";
+      } else if (contentType.includes('application/pdf')) {
+        fileTypeEmoji = "📕";
+        fileTypeDesc = "PDF document";
+      } else if (contentType.includes('text/plain')) {
+        fileTypeEmoji = "📝";
+        fileTypeDesc = "text file";
+      } else if (contentType.includes('audio/mpeg')) {
+        fileTypeEmoji = "🎵";
+        fileTypeDesc = "MP3 audio";
+      } else if (contentType.includes('image/png')) {
+        fileTypeEmoji = "🖼️";
+        fileTypeDesc = "PNG image";
+      } else if (contentType.includes('application/zip')) {
+        fileTypeEmoji = "📦";
+        fileTypeDesc = "ZIP archive";
+      }
+      
+      alert(`✅ ${fileTypeEmoji} Download completed: ${filename}\n📋 Type: ${fileTypeDesc}`);
     } catch (error) {
       console.error('Download failed:', error);
       if (error.response?.status === 404) {

@@ -31,6 +31,18 @@ pip install -r api_requirements.txt
 }
 ```
 
+3. Configure authentication tokens in `auth_tokens.json`:
+```json
+{
+    "tokens": [
+        "token_admin_abc123def456",
+        "token_user_xyz789uvw012",
+        "token_service_mno345pqr678"
+    ]
+}
+```
+*Copy from `auth_tokens.json.example` and customize as needed.*
+
 ## Running the API
 
 Start the server:
@@ -109,6 +121,7 @@ POST /tts
 1. **Translate a PPTX file**:
 ```bash
 curl -X POST "http://localhost:8000/translate/pptx" \
+  -H "Authorization: Bearer token_admin_abc123def456" \
   -F "source_lang=en" \
   -F "target_lang=fr" \
   -F "files=@presentation.pptx"
@@ -116,22 +129,28 @@ curl -X POST "http://localhost:8000/translate/pptx" \
 
 2. **Check task status**:
 ```bash
-curl "http://localhost:8000/tasks/{task_id}"
+curl -H "Authorization: Bearer token_admin_abc123def456" \
+  "http://localhost:8000/tasks/{task_id}"
 ```
 
 3. **Download results**:
 ```bash
 # Download all results (single file directly, multiple files as ZIP)
-curl -O "http://localhost:8000/download/{task_id}"
+curl -H "Authorization: Bearer token_admin_abc123def456" \
+  -O "http://localhost:8000/download/{task_id}"
 
 # Download specific file by index (0-based)
-curl -O "http://localhost:8000/download/{task_id}/0"
+curl -H "Authorization: Bearer token_admin_abc123def456" \
+  -O "http://localhost:8000/download/{task_id}/0"
 ```
 
 ### Using Python requests
 
 ```python
 import requests
+
+# Setup authentication
+headers = {'Authorization': 'Bearer token_admin_abc123def456'}
 
 # Upload file for translation
 files = {'files': open('presentation.pptx', 'rb')}
@@ -140,19 +159,36 @@ data = {'source_lang': 'en', 'target_lang': 'fr'}
 response = requests.post(
     'http://localhost:8000/translate/pptx', 
     files=files, 
-    data=data
+    data=data,
+    headers=headers
 )
 
 task_id = response.json()['task_id']
 
 # Check status
-status_response = requests.get(f'http://localhost:8000/tasks/{task_id}')
+status_response = requests.get(
+    f'http://localhost:8000/tasks/{task_id}',
+    headers=headers
+)
 print(status_response.json())
 
 # Download when complete
 if status_response.json()['status'] == 'completed':
-    download_response = requests.get(f'http://localhost:8000/download/{task_id}')
-    with open('result.zip', 'wb') as f:
+    download_response = requests.get(
+        f'http://localhost:8000/download/{task_id}',
+        headers=headers
+    )
+    
+    # Save with proper extension based on Content-Type
+    content_type = download_response.headers.get('content-type', '')
+    if 'presentation' in content_type:
+        filename = 'translated_presentation.pptx'
+    elif 'application/zip' in content_type:
+        filename = 'results.zip'
+    else:
+        filename = 'result.file'
+    
+    with open(filename, 'wb') as f:
         f.write(download_response.content)
 ```
 

@@ -15,6 +15,13 @@ The API will be available at `http://localhost:8000`
 curl http://localhost:8000/health
 ```
 
+3. **Ensure authentication tokens are configured:**
+The API requires authentication tokens. Make sure `auth_tokens.json` exists:
+```bash
+cp auth_tokens.json.example auth_tokens.json
+# Edit auth_tokens.json to customize tokens if needed
+```
+
 ## Testing Methods
 
 ### 1. 🌐 React Web Interface (Recommended)
