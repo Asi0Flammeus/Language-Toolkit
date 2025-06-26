@@ -21,6 +21,7 @@ import fitz
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.dml import MSO_THEME_COLOR, MSO_COLOR_TYPE
+from PIL import Image
 from core.tool_descriptions import get_short_description, get_tool_info, get_quick_tips
 
 
@@ -1177,8 +1178,8 @@ class TextTranslationTool(ToolBase, LanguageSelectionMixin):
 
 class PPTXtoPDFTool(ToolBase):
     """
-    Converts PPTX files to PDF or PNG using ConvertAPI service.
-    Supports both PDF conversion and PNG conversion (one PNG per slide).
+    Converts PPTX files to PDF, PNG, or WEBP using ConvertAPI service.
+    Supports PDF conversion, PNG conversion (one PNG per slide), and WEBP conversion (PNG to WEBP).
     """
 
     def __init__(self, master, config_manager, progress_queue):
@@ -1197,6 +1198,9 @@ class PPTXtoPDFTool(ToolBase):
         ttk.Radiobutton(format_frame, text="PNG (One per slide)",
                        variable=self.output_format,
                        value="png").pack(side=tk.LEFT, padx=10)
+        ttk.Radiobutton(format_frame, text="WEBP (One per slide)",
+                       variable=self.output_format,
+                       value="webp").pack(side=tk.LEFT, padx=10)
 
     def before_processing(self):
         """Load credentials before starting the batch."""
@@ -1213,8 +1217,9 @@ class PPTXtoPDFTool(ToolBase):
     def process_file(self, input_file: Path, output_dir: Path):
         """
         Processes a single PPTX file.
-        Converts to either PDF or PNG using ConvertAPI.
-        For PNG output, files are renamed to use sequential numbering (00, 01, 02, etc.)
+        Converts to PDF, PNG, or WEBP using ConvertAPI.
+        For PNG/WEBP output, files are renamed to use sequential numbering (00, 01, 02, etc.)
+        For WEBP output, first converts to PNG, then converts PNG to WEBP.
         """
         try:
             output_format = self.output_format.get()
@@ -1223,40 +1228,70 @@ class PPTXtoPDFTool(ToolBase):
             # Ensure output directory exists
             output_dir.mkdir(parents=True, exist_ok=True)
 
-            # Convert the file
-            result = convertapi.convert(
-                output_format,
-                {
-                    'File': str(input_file)
-                },
-                from_format='pptx'
-            )
-
-            # Save the converted files
-            saved_files = result.save_files(str(output_dir))
-            
-            # For PNG output, rename files with sequential numbering
-            if output_format == 'png':
-                # Get list of files and sort them by creation time
+            # For WEBP, we need to convert to PNG first, then PNG to WEBP
+            if output_format == 'webp':
+                # Convert to PNG first
+                result = convertapi.convert(
+                    'png',
+                    {
+                        'File': str(input_file)
+                    },
+                    from_format='pptx'
+                )
+                
+                # Save PNG files temporarily
+                saved_files = result.save_files(str(output_dir))
                 saved_paths = [Path(f) for f in saved_files]
                 # Sort by creation time to maintain slide order
                 sorted_files = sorted(saved_paths, key=lambda x: x.stat().st_ctime)
                 
-                # Reverse the list to get correct slide order (first slide first)
-                # sorted_files.reverse()
-                
-                # Create new names with sequential numbering
-                for idx, old_path in enumerate(sorted_files):
-                    new_name = f"{input_file.stem}_{idx:02d}.png"  # Use 02d for 2-digit padding
-                    new_path = old_path.parent / new_name
+                # Convert each PNG to WEBP
+                for idx, png_path in enumerate(sorted_files):
+                    # Create new WEBP filename with sequential numbering
+                    webp_name = f"{input_file.stem}_{idx:02d}.webp"
+                    webp_path = png_path.parent / webp_name
                     
-                    # Rename the file
-                    old_path.rename(new_path)
-                    self.send_progress_update(f"Saved slide {idx:02d}: {new_name}")
+                    # Convert PNG to WEBP using PIL
+                    self.send_progress_update(f"Converting slide {idx:02d} to WEBP...")
+                    with Image.open(png_path) as img:
+                        img.save(webp_path, 'WEBP', quality=85, method=6)
+                    
+                    # Remove the temporary PNG file
+                    png_path.unlink()
+                    
+                    self.send_progress_update(f"Saved slide {idx:02d}: {webp_name}")
             else:
-                # For PDF, just log the saved file
-                for saved_file in saved_files:
-                    self.send_progress_update(f"Successfully saved: {Path(saved_file).name}")
+                # Convert the file using the original format
+                result = convertapi.convert(
+                    output_format,
+                    {
+                        'File': str(input_file)
+                    },
+                    from_format='pptx'
+                )
+
+                # Save the converted files
+                saved_files = result.save_files(str(output_dir))
+                
+                # For PNG output, rename files with sequential numbering
+                if output_format == 'png':
+                    # Get list of files and sort them by creation time
+                    saved_paths = [Path(f) for f in saved_files]
+                    # Sort by creation time to maintain slide order
+                    sorted_files = sorted(saved_paths, key=lambda x: x.stat().st_ctime)
+                    
+                    # Create new names with sequential numbering
+                    for idx, old_path in enumerate(sorted_files):
+                        new_name = f"{input_file.stem}_{idx:02d}.png"  # Use 02d for 2-digit padding
+                        new_path = old_path.parent / new_name
+                        
+                        # Rename the file
+                        old_path.rename(new_path)
+                        self.send_progress_update(f"Saved slide {idx:02d}: {new_name}")
+                else:
+                    # For PDF, just log the saved file
+                    for saved_file in saved_files:
+                        self.send_progress_update(f"Successfully saved: {Path(saved_file).name}")
 
             return True
 
@@ -1906,7 +1941,7 @@ class MainApp(TkinterDnD.Tk):
         self.pptx_translation_tool = self.create_tool_tab("PPTX Translation", PPTXTranslationTool)
         self.audio_transcription_tool = self.create_tool_tab("Audio Transcription", AudioTranscriptionTool)
         self.text_translation_tool = self.create_tool_tab("Text Translation", TextTranslationTool)
-        self.pptx_to_pdf_tool = self.create_tool_tab("PPTX to PDF/PNG", PPTXtoPDFTool)
+        self.pptx_to_pdf_tool = self.create_tool_tab("PPTX to PDF/PNG/WEBP", PPTXtoPDFTool)
         self.text_to_speech_tool = self.create_tool_tab("Text to Speech", TextToSpeechTool)  
         self.video_merge_tool = self.create_tool_tab("Video Merge", VideoMergeTool)
         self.sequential_tool = self.create_tool_tab("Sequential Processing", SequentialProcessingTool)

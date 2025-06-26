@@ -336,6 +336,9 @@ async def run_pptx_conversion_async(task_id: str, input_files: List[Path],
                         elif output_format.lower() == 'png':
                             png_files = converter.convert_pptx_to_png(input_file, output_dir)
                             result_files.extend(png_files)
+                        elif output_format.lower() == 'webp':
+                            webp_files = converter.convert_pptx_to_webp(input_file, output_dir)
+                            result_files.extend(webp_files)
                         else:
                             raise ValueError(f"Unsupported output format: {output_format}")
                         
@@ -640,9 +643,9 @@ async def convert_pptx(
     files: List[UploadFile] = File(...),
     token: str = Depends(verify_token)
 ):
-    """Convert PPTX files to PDF or PNG"""
-    if output_format not in ["pdf", "png"]:
-        raise HTTPException(status_code=400, detail="Output format must be 'pdf' or 'png'")
+    """Convert PPTX files to PDF, PNG, or WEBP"""
+    if output_format not in ["pdf", "png", "webp"]:
+        raise HTTPException(status_code=400, detail="Output format must be 'pdf', 'png', or 'webp'")
     
     task_id = create_task_id()
     temp_dir = get_temp_dir()
