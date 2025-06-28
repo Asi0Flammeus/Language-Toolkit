@@ -21,6 +21,8 @@ import fitz
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.dml import MSO_THEME_COLOR, MSO_COLOR_TYPE
+from PIL import Image
+from core.tool_descriptions import get_short_description, get_tool_info, get_quick_tips
 
 
 # --- Constants ---
@@ -471,7 +473,7 @@ class TextToSpeechTool(ToolBase):
             return None
             
         # Split the filename by common delimiters
-        parts = re.split('[_\- ]', filename_stem.lower())
+        parts = re.split('[_\\- ]', filename_stem.lower())
         
         # Look for any part that matches a voice name (case-insensitive)
         voice_names = {name.lower(): name for name in self.voice_map.keys()}
@@ -1176,8 +1178,8 @@ class TextTranslationTool(ToolBase, LanguageSelectionMixin):
 
 class PPTXtoPDFTool(ToolBase):
     """
-    Converts PPTX files to PDF or PNG using ConvertAPI service.
-    Supports both PDF conversion and PNG conversion (one PNG per slide).
+    Converts PPTX files to PDF, PNG, or WEBP using ConvertAPI service.
+    Supports PDF conversion, PNG conversion (one PNG per slide), and WEBP conversion (PNG to WEBP).
     """
 
     def __init__(self, master, config_manager, progress_queue):
@@ -1196,6 +1198,9 @@ class PPTXtoPDFTool(ToolBase):
         ttk.Radiobutton(format_frame, text="PNG (One per slide)",
                        variable=self.output_format,
                        value="png").pack(side=tk.LEFT, padx=10)
+        ttk.Radiobutton(format_frame, text="WEBP (One per slide)",
+                       variable=self.output_format,
+                       value="webp").pack(side=tk.LEFT, padx=10)
 
     def before_processing(self):
         """Load credentials before starting the batch."""
@@ -1212,8 +1217,9 @@ class PPTXtoPDFTool(ToolBase):
     def process_file(self, input_file: Path, output_dir: Path):
         """
         Processes a single PPTX file.
-        Converts to either PDF or PNG using ConvertAPI.
-        For PNG output, files are renamed to use sequential numbering (00, 01, 02, etc.)
+        Converts to PDF, PNG, or WEBP using ConvertAPI.
+        For PNG/WEBP output, files are renamed to use sequential numbering (00, 01, 02, etc.)
+        For WEBP output, first converts to PNG, then converts PNG to WEBP.
         """
         try:
             output_format = self.output_format.get()
@@ -1222,40 +1228,70 @@ class PPTXtoPDFTool(ToolBase):
             # Ensure output directory exists
             output_dir.mkdir(parents=True, exist_ok=True)
 
-            # Convert the file
-            result = convertapi.convert(
-                output_format,
-                {
-                    'File': str(input_file)
-                },
-                from_format='pptx'
-            )
-
-            # Save the converted files
-            saved_files = result.save_files(str(output_dir))
-            
-            # For PNG output, rename files with sequential numbering
-            if output_format == 'png':
-                # Get list of files and sort them by creation time
+            # For WEBP, we need to convert to PNG first, then PNG to WEBP
+            if output_format == 'webp':
+                # Convert to PNG first
+                result = convertapi.convert(
+                    'png',
+                    {
+                        'File': str(input_file)
+                    },
+                    from_format='pptx'
+                )
+                
+                # Save PNG files temporarily
+                saved_files = result.save_files(str(output_dir))
                 saved_paths = [Path(f) for f in saved_files]
                 # Sort by creation time to maintain slide order
                 sorted_files = sorted(saved_paths, key=lambda x: x.stat().st_ctime)
                 
-                # Reverse the list to get correct slide order (first slide first)
-                # sorted_files.reverse()
-                
-                # Create new names with sequential numbering
-                for idx, old_path in enumerate(sorted_files):
-                    new_name = f"{input_file.stem}_{idx:02d}.png"  # Use 02d for 2-digit padding
-                    new_path = old_path.parent / new_name
+                # Convert each PNG to WEBP
+                for idx, png_path in enumerate(sorted_files):
+                    # Create new WEBP filename with sequential numbering
+                    webp_name = f"{input_file.stem}_{idx:02d}.webp"
+                    webp_path = png_path.parent / webp_name
                     
-                    # Rename the file
-                    old_path.rename(new_path)
-                    self.send_progress_update(f"Saved slide {idx:02d}: {new_name}")
+                    # Convert PNG to WEBP using PIL
+                    self.send_progress_update(f"Converting slide {idx:02d} to WEBP...")
+                    with Image.open(png_path) as img:
+                        img.save(webp_path, 'WEBP', quality=85, method=6)
+                    
+                    # Remove the temporary PNG file
+                    png_path.unlink()
+                    
+                    self.send_progress_update(f"Saved slide {idx:02d}: {webp_name}")
             else:
-                # For PDF, just log the saved file
-                for saved_file in saved_files:
-                    self.send_progress_update(f"Successfully saved: {Path(saved_file).name}")
+                # Convert the file using the original format
+                result = convertapi.convert(
+                    output_format,
+                    {
+                        'File': str(input_file)
+                    },
+                    from_format='pptx'
+                )
+
+                # Save the converted files
+                saved_files = result.save_files(str(output_dir))
+                
+                # For PNG output, rename files with sequential numbering
+                if output_format == 'png':
+                    # Get list of files and sort them by creation time
+                    saved_paths = [Path(f) for f in saved_files]
+                    # Sort by creation time to maintain slide order
+                    sorted_files = sorted(saved_paths, key=lambda x: x.stat().st_ctime)
+                    
+                    # Create new names with sequential numbering
+                    for idx, old_path in enumerate(sorted_files):
+                        new_name = f"{input_file.stem}_{idx:02d}.png"  # Use 02d for 2-digit padding
+                        new_path = old_path.parent / new_name
+                        
+                        # Rename the file
+                        old_path.rename(new_path)
+                        self.send_progress_update(f"Saved slide {idx:02d}: {new_name}")
+                else:
+                    # For PDF, just log the saved file
+                    for saved_file in saved_files:
+                        self.send_progress_update(f"Successfully saved: {Path(saved_file).name}")
 
             return True
 
@@ -1862,9 +1898,20 @@ class MainApp(TkinterDnD.Tk):
         """Creates the main UI elements."""
         # Menu
         self.menu_bar = tk.Menu(self)
+        
+        # Configuration menu
         self.config_menu = tk.Menu(self.menu_bar, tearoff=0)
         self.config_menu.add_command(label="API Keys", command=self.open_api_key_config)
         self.menu_bar.add_cascade(label="Configuration", menu=self.config_menu)
+        
+        # Help menu
+        self.help_menu = tk.Menu(self.menu_bar, tearoff=0)
+        self.help_menu.add_command(label="Tool Overview", command=self.show_tool_overview)
+        self.help_menu.add_command(label="API Requirements", command=self.show_api_requirements)
+        self.help_menu.add_separator()
+        self.help_menu.add_command(label="About", command=self.show_about)
+        self.menu_bar.add_cascade(label="Help", menu=self.help_menu)
+        
         self.config(menu=self.menu_bar)
 
         # Notebook (Tab Control)
@@ -1875,7 +1922,7 @@ class MainApp(TkinterDnD.Tk):
         self.pptx_translation_tool = self.create_tool_tab("PPTX Translation", PPTXTranslationTool)
         self.audio_transcription_tool = self.create_tool_tab("Audio Transcription", AudioTranscriptionTool)
         self.text_translation_tool = self.create_tool_tab("Text Translation", TextTranslationTool)
-        self.pptx_to_pdf_tool = self.create_tool_tab("PPTX to PDF/PNG", PPTXtoPDFTool)
+        self.pptx_to_pdf_tool = self.create_tool_tab("PPTX to PDF/PNG/WEBP", PPTXtoPDFTool)
         self.text_to_speech_tool = self.create_tool_tab("Text to Speech", TextToSpeechTool)  
         self.video_merge_tool = self.create_tool_tab("Video Merge", VideoMergeTool)
         self.sequential_tool = self.create_tool_tab("Sequential Processing", SequentialProcessingTool)
@@ -1899,6 +1946,24 @@ class MainApp(TkinterDnD.Tk):
         frame = ttk.Frame(self.notebook)
         self.notebook.add(frame, text=tab_name)
         
+        # Map tool classes to description keys
+        tool_description_map = {
+            PPTXTranslationTool: "pptx_translation",
+            AudioTranscriptionTool: "audio_transcription", 
+            TextTranslationTool: "text_translation",
+            PPTXtoPDFTool: "pptx_to_pdf_png",
+            TextToSpeechTool: "text_to_speech",
+            VideoMergeTool: "video_merge",
+            SequentialProcessingTool: "sequential_processing"
+        }
+        
+        # Get tool description key
+        tool_key = tool_description_map.get(tool_class)
+        
+        # Add description at the top of the tab
+        if tool_key:
+            self.add_tool_description(frame, tool_key)
+        
         tool = tool_class(
             master=frame,
             config_manager=self.config_manager,
@@ -1908,6 +1973,109 @@ class MainApp(TkinterDnD.Tk):
         self.create_tool_ui(frame, tool)
         return tool
 
+    def add_tool_description(self, frame, tool_key):
+        """Add description and help information to the tool tab."""
+        try:
+            # Get tool information
+            tool_info = get_tool_info(tool_key)
+            if not tool_info:
+                return
+            
+            desc = tool_info["description"]
+            req = tool_info["requirements"]
+            tips = tool_info["tips"]
+            
+            # Create description frame
+            desc_frame = ttk.LabelFrame(frame, text=" Tool Information", padding=10)
+            desc_frame.pack(fill="x", padx=5, pady=5)
+            
+            # Main description
+            desc_label = tk.Label(desc_frame, text=desc["description"], 
+                                font=("Arial", 10, "bold"), fg="navy", wraplength=700)
+            desc_label.pack(anchor="w")
+            
+            # Detailed description
+            detail_label = tk.Label(desc_frame, text=desc["details"], 
+                                  font=("Arial", 9), fg="gray40", wraplength=700)
+            detail_label.pack(anchor="w", pady=(2, 8))
+            
+            # API requirement info
+            if req.get("api_required"):
+                api_text = f"🔑 Requires: {req['api_required']} API key"
+                if req["api_required"] == "Multiple":
+                    api_text = "🔑 Requires: Multiple API keys (see Configuration menu)"
+                api_label = tk.Label(desc_frame, text=api_text, 
+                                   font=("Arial", 9), fg="red")
+                api_label.pack(anchor="w")
+            else:
+                no_api_label = tk.Label(desc_frame, text="✅ No API key required", 
+                                      font=("Arial", 9), fg="green")
+                no_api_label.pack(anchor="w")
+            
+            # Quick tips (collapsible)
+            if tips:
+                tips_frame = ttk.Frame(desc_frame)
+                tips_frame.pack(fill="x", pady=(5, 0))
+                
+                # Tips toggle button
+                self.tips_visible = tk.BooleanVar(value=False)
+                tips_btn = tk.Button(tips_frame, text="💡 Show Quick Tips", 
+                                   command=lambda: self.toggle_tips(tips_frame, tool_key, tips))
+                tips_btn.pack(anchor="w")
+                
+        except Exception as e:
+            # Silently handle any errors in description display
+            logging.warning(f"Could not add description for {tool_key}: {e}")
+
+    def add_tab_tooltip(self, tab_name, tool_key):
+        """Add tooltip to notebook tab."""
+        try:
+            short_desc = get_short_description(tool_key)
+            if short_desc and short_desc != "Tool description not available":
+                # Create a simple tooltip by binding to the tab
+                self.create_tooltip_for_tab(tab_name, short_desc)
+        except Exception as e:
+            logging.warning(f"Could not add tooltip for {tool_key}: {e}")
+
+    def create_tooltip_for_tab(self, tab_name, description):
+        """Create a tooltip for a specific tab."""
+        def show_tooltip(event):
+            # Simple tooltip implementation - could be enhanced
+            tooltip = tk.Toplevel()
+            tooltip.wm_overrideredirect(True)
+            tooltip.wm_geometry(f"+{event.x_root + 10}+{event.y_root + 10}")
+            
+            label = tk.Label(tooltip, text=description, background="lightyellow", 
+                           relief="solid", borderwidth=1, font=("Arial", 9),
+                           wraplength=300)
+            label.pack()
+            
+            # Auto-hide after 3 seconds
+            tooltip.after(3000, tooltip.destroy)
+        
+        # This is a simplified tooltip - in a full implementation you'd want
+        # to bind to the actual tab widget, but tkinter notebook tabs are complex
+        pass
+
+    def toggle_tips(self, parent_frame, tool_key, tips):
+        """Toggle display of quick tips."""
+        # Remove existing tips if any
+        for widget in parent_frame.winfo_children():
+            if isinstance(widget, tk.Frame) and hasattr(widget, 'tips_frame'):
+                widget.destroy()
+                return
+        
+        # Create tips display
+        tips_display = tk.Frame(parent_frame)
+        tips_display.tips_frame = True  # Mark as tips frame
+        tips_display.pack(fill="x", pady=(5, 0))
+        
+        tk.Label(tips_display, text="Quick Tips:", font=("Arial", 9, "bold")).pack(anchor="w")
+        
+        for i, tip in enumerate(tips, 1):
+            tip_label = tk.Label(tips_display, text=f"  {i}. {tip}", 
+                               font=("Arial", 8), fg="gray30", wraplength=650)
+            tip_label.pack(anchor="w", padx=(10, 0))
 
     def create_tool_ui(self, frame, tool):
         """Creates the UI elements for a specific tool."""
@@ -2105,6 +2273,142 @@ class MainApp(TkinterDnD.Tk):
         self.progress_text.insert(tk.END, message + "\n")
         self.progress_text.see(tk.END)
         self.progress_text.config(state="disabled")
+
+    def show_tool_overview(self):
+        """Show overview of all available tools."""
+        try:
+            from core.tool_descriptions import get_tool_list_for_gui
+            
+            # Create overview window
+            overview_window = tk.Toplevel(self)
+            overview_window.title("Tool Overview")
+            overview_window.geometry("700x500")
+            overview_window.resizable(True, True)
+            
+            # Create scrollable frame
+            canvas = tk.Canvas(overview_window)
+            scrollbar = ttk.Scrollbar(overview_window, orient="vertical", command=canvas.yview)
+            scrollable_frame = ttk.Frame(canvas)
+            
+            scrollable_frame.bind(
+                "<Configure>",
+                lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+            )
+            
+            canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+            canvas.configure(yscrollcommand=scrollbar.set)
+            
+            # Title
+            title_label = tk.Label(scrollable_frame, text="Language Toolkit - Tool Overview", 
+                                 font=("Arial", 16, "bold"), fg="navy")
+            title_label.pack(pady=10)
+            
+            # Get all tools
+            tools = get_tool_list_for_gui()
+            
+            for tool in tools:
+                # Tool frame
+                tool_frame = ttk.LabelFrame(scrollable_frame, text=tool["title"], padding=10)
+                tool_frame.pack(fill="x", padx=10, pady=5)
+                
+                # Description
+                desc_label = tk.Label(tool_frame, text=tool["description"], 
+                                    font=("Arial", 10), wraplength=600)
+                desc_label.pack(anchor="w")
+                
+                # API requirement
+                if tool["has_api_requirement"]:
+                    api_label = tk.Label(tool_frame, text=f"🔑 Requires: {tool['api_required']} API key", 
+                                       font=("Arial", 9), fg="red")
+                    api_label.pack(anchor="w", pady=(5, 0))
+                else:
+                    api_label = tk.Label(tool_frame, text="✅ No API key required", 
+                                       font=("Arial", 9), fg="green")
+                    api_label.pack(anchor="w", pady=(5, 0))
+            
+            canvas.pack(side="left", fill="both", expand=True)
+            scrollbar.pack(side="right", fill="y")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not show tool overview: {e}")
+
+    def show_api_requirements(self):
+        """Show API key requirements for all tools."""
+        try:
+            from core.tool_descriptions import get_tool_requirements
+            
+            requirements = get_tool_requirements()
+            
+            # Create requirements window
+            req_window = tk.Toplevel(self)
+            req_window.title("API Key Requirements")
+            req_window.geometry("600x400")
+            
+            # Title
+            title_label = tk.Label(req_window, text="API Key Requirements", 
+                                 font=("Arial", 16, "bold"), fg="navy")
+            title_label.pack(pady=10)
+            
+            # Instructions
+            instructions = tk.Label(req_window, 
+                                  text="Configure API keys via Configuration → API Keys menu",
+                                  font=("Arial", 10), fg="gray40")
+            instructions.pack(pady=(0, 10))
+            
+            # Scrollable frame for requirements
+            canvas = tk.Canvas(req_window)
+            scrollbar = ttk.Scrollbar(req_window, orient="vertical", command=canvas.yview)
+            scrollable_frame = ttk.Frame(canvas)
+            
+            scrollable_frame.bind(
+                "<Configure>",
+                lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+            )
+            
+            canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+            canvas.configure(yscrollcommand=scrollbar.set)
+            
+            for tool_name, req in requirements.items():
+                tool_frame = ttk.LabelFrame(scrollable_frame, text=tool_name.replace("_", " ").title(), padding=10)
+                tool_frame.pack(fill="x", padx=10, pady=5)
+                
+                if req["api_required"]:
+                    req_label = tk.Label(tool_frame, text=f"Required: {req['api_required']}", 
+                                       font=("Arial", 10, "bold"), fg="red")
+                    req_label.pack(anchor="w")
+                    
+                    desc_label = tk.Label(tool_frame, text=req["api_description"], 
+                                        font=("Arial", 9), fg="gray40")
+                    desc_label.pack(anchor="w")
+                else:
+                    no_req_label = tk.Label(tool_frame, text="No API key required", 
+                                          font=("Arial", 10), fg="green")
+                    no_req_label.pack(anchor="w")
+            
+            canvas.pack(side="left", fill="both", expand=True, padx=(10, 0))
+            scrollbar.pack(side="right", fill="y", padx=(0, 10))
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not show API requirements: {e}")
+
+    def show_about(self):
+        """Show about dialog."""
+        about_text = """Language Toolkit
+        
+A comprehensive suite of tools for language processing, document conversion, and content creation.
+
+Features:
+• PowerPoint Translation
+• Audio Transcription  
+• Text Translation
+• Document Conversion
+• Text-to-Speech Generation
+• Video Creation and Merging
+• Sequential Processing Workflows
+
+Built with Python and integrates with leading AI services for professional-quality results."""
+        
+        messagebox.showinfo("About Language Toolkit", about_text)
 
 if __name__ == "__main__":
     app = MainApp()

@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  api:
+    build: .
+    container_name: language-toolkit-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./api_keys.json:/app/api_keys.json:ro
+      - ./auth_tokens.json:/app/auth_tokens.json:ro
+      - ./logs:/app/logs
+      - ./temp:/app/temp
+    environment:
+      - PYTHONPATH=/app
+    networks:
+      - language-toolkit
+
+  nginx:
+    image: nginx:alpine
+    container_name: language-toolkit-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+      - ./logs:/var/log/nginx
+    depends_on:
+      - api
+    networks:
+      - language-toolkit
+
+networks:
+  language-toolkit:
+    driver: bridge
+
+volumes:
+  logs:
+  temp:

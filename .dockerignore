@@ -1,0 +1,59 @@
+# Docker ignore file for Language Toolkit API
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+temp/
+
+# Test files
+test-app/
+api-test-app/
+
+# Documentation
+README_*.md
+TESTING.md
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# SSL certificates (should be mounted)
+ssl/
+
+# Development files
+*.dev
+*.local
+.env

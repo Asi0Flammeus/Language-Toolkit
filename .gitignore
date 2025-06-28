@@ -9,3 +9,5 @@ playground.py
 api_keys.json
 test-app/
 elevenlabs_voices.json
+api-test-app/node_modules
+auth_tokens.json
