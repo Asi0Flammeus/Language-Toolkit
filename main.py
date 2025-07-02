@@ -1894,9 +1894,16 @@ class MainApp(TkinterDnD.Tk):
         
         self.config(menu=self.menu_bar)
 
-        # Notebook (Tab Control)
-        self.notebook = ttk.Notebook(self)
-        self.notebook.pack(expand=True, fill="both", padx=10, pady=10)
+        # Create main paned window for resizable layout
+        self.main_paned = ttk.PanedWindow(self, orient=tk.VERTICAL)
+        self.main_paned.pack(expand=True, fill="both", padx=10, pady=10)
+
+        # Top pane: Notebook (Tab Control)
+        self.top_frame = ttk.Frame(self.main_paned)
+        self.main_paned.add(self.top_frame, weight=3)
+
+        self.notebook = ttk.Notebook(self.top_frame)
+        self.notebook.pack(expand=True, fill="both")
 
         # Tool Frames
         self.pptx_translation_tool = self.create_tool_tab("PPTX Translation", PPTXTranslationTool)
@@ -1907,17 +1914,21 @@ class MainApp(TkinterDnD.Tk):
         self.video_merge_tool = self.create_tool_tab("Video Merge", VideoMergeTool)
         self.sequential_tool = self.create_tool_tab("Sequential Processing", SequentialProcessingTool)
 
+        # Bottom pane: Progress Text Area
+        self.bottom_frame = ttk.Frame(self.main_paned)
+        self.main_paned.add(self.bottom_frame, weight=1)
 
+        self.progress_label = tk.Label(self.bottom_frame, text="Progress:")
+        self.progress_label.pack(pady=(5, 5))
 
+        # Create frame for progress text and scrollbar
+        self.progress_frame = ttk.Frame(self.bottom_frame)
+        self.progress_frame.pack(expand=True, fill="both", padx=10, pady=(0, 10))
 
-        # Progress Text Area
-        self.progress_label = tk.Label(self, text="Progress:")
-        self.progress_label.pack(pady=(0, 5))
+        self.progress_text = tk.Text(self.progress_frame, state="disabled", wrap=tk.WORD)
+        self.progress_text.pack(side=tk.LEFT, expand=True, fill="both")
 
-        self.progress_text = tk.Text(self, height=10, width=80, state="disabled")
-        self.progress_text.pack(expand=False, fill="x", padx=10, pady=(0, 10))
-
-        self.sb = tk.Scrollbar(self, command=self.progress_text.yview)
+        self.sb = tk.Scrollbar(self.progress_frame, command=self.progress_text.yview)
         self.sb.pack(side=tk.RIGHT, fill=tk.Y)
         self.progress_text['yscrollcommand'] = self.sb.set
 
