@@ -73,29 +73,9 @@ class ConfigManager:
     def save_languages(self):
         self.save_json(self.languages, self.languages_file)
     
-
-    def save_api_keys(self, api_entries, window):
-        """Saves the API keys entered in the configuration dialog."""
-        api_keys = {}
-        for name, entry in api_entries.items():
-            api_keys[name] = entry.get().strip()
-        
-        # Update the config_manager with new keys
-        self.config_manager.api_keys = api_keys
-        self.config_manager.save_api_keys()
-        
-        # Update the API keys in existing tools
-        if hasattr(self, 'text_to_speech_tool'):
-            self.text_to_speech_tool.api_key = api_keys.get("elevenlabs")
-        if hasattr(self, 'audio_transcription_tool'):
-            self.audio_transcription_tool.api_key = api_keys.get("openai")
-        if hasattr(self, 'text_translation_tool'):
-            self.text_translation_tool.api_key = api_keys.get("deepl")
-        if hasattr(self, 'pptx_translation_tool'):
-            self.pptx_translation_tool.api_key = api_keys.get("deepl")
-        
-        window.destroy()
-        messagebox.showinfo("Success", "API keys saved successfully")
+    def save_api_keys(self):
+        """Saves the current API keys to the JSON file."""
+        self.save_json(self.api_keys, self.api_keys_file)
 
 class ToolBase:
     """Base class for all tools in the application."""
@@ -2255,6 +2235,29 @@ class MainApp(TkinterDnD.Tk):
         save_button = ttk.Button(api_config_window, text="Save",
                                command=lambda: self.save_api_keys(api_entries, api_config_window))
         save_button.pack(pady=15)
+
+    def save_api_keys(self, api_entries, window):
+        """Saves the API keys entered in the configuration dialog."""
+        api_keys = {}
+        for name, entry in api_entries.items():
+            api_keys[name] = entry.get().strip()
+        
+        # Update the config_manager with new keys
+        self.config_manager.api_keys = api_keys
+        self.config_manager.save_api_keys()
+        
+        # Update the API keys in existing tools
+        if hasattr(self, 'text_to_speech_tool'):
+            self.text_to_speech_tool.api_key = api_keys.get("elevenlabs")
+        if hasattr(self, 'audio_transcription_tool'):
+            self.audio_transcription_tool.api_key = api_keys.get("openai")
+        if hasattr(self, 'text_translation_tool'):
+            self.text_translation_tool.api_key = api_keys.get("deepl")
+        if hasattr(self, 'pptx_translation_tool'):
+            self.pptx_translation_tool.api_key = api_keys.get("deepl")
+        
+        window.destroy()
+        messagebox.showinfo("Success", "API keys saved successfully")
 
     def process_progress_queue(self):
         """Processes messages from the progress queue."""
