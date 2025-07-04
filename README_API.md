@@ -114,6 +114,24 @@ POST /tts
 ```
 - **Files**: Upload TXT files (must contain voice name in filename)
 
+#### PPTX Translation from S3
+```
+POST /translate/pptx_s3
+```
+- **JSON Body**:
+  - `input_keys`: Array of S3 object keys for the input PPTX files
+  - `output_prefix`: (Optional) Destination S3 prefix for translated files
+  - `source_lang`: Source language code (e.g., "en")
+  - `target_lang`: Target language code (e.g., "fr")
+
+#### Audio Transcription from S3
+```
+POST /transcribe/audio_s3
+```
+- **JSON Body**:
+  - `input_keys`: Array of S3 object keys for the input audio files
+  - `output_prefix`: (Optional) Destination S3 prefix for transcription results
+
 ## Usage Examples
 
 ### Using curl
@@ -142,6 +160,30 @@ curl -H "Authorization: Bearer token_admin_abc123def456" \
 # Download specific file by index (0-based)
 curl -H "Authorization: Bearer token_admin_abc123def456" \
   -O "http://localhost:8000/download/{task_id}/0"
+```
+
+4. **Translate a PPTX stored in S3**:
+```bash
+curl -X POST "http://localhost:8000/translate/pptx_s3" \
+  -H "Authorization: Bearer token_admin_abc123def456" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "input_keys": ["bucket/folder/presentation.pptx"],
+        "output_prefix": "translated_",
+        "source_lang": "en",
+        "target_lang": "fr"
+      }'
+```
+
+5. **Transcribe an audio file stored in S3**:
+```bash
+curl -X POST "http://localhost:8000/transcribe/audio_s3" \
+  -H "Authorization: Bearer token_admin_abc123def456" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "input_keys": ["bucket/folder/lecture.mp3"],
+        "output_prefix": "transcripts/"
+      }'
 ```
 
 ### Using Python requests

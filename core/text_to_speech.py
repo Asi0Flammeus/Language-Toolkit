@@ -30,13 +30,14 @@ Supported Text Formats:
     - Handles large text content efficiently
 """
 
-import logging
-import requests
 import json
+import logging
 import re
 import time
 from pathlib import Path
-from typing import Optional, Callable, Dict, Any, List
+from typing import Any, Callable, Dict, List, Optional
+
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -250,3 +251,35 @@ class TextToSpeechCore:
                 return len(content.strip()) > 0
         except Exception:
             return False
+    
+    def text_to_speech_file(self, input_path: Path, output_path: Path, voice_settings: Optional[Dict[str, Any]] = None) -> bool:
+        """Backward-compatibility helper used by *api_server.py*.
+
+        The API layer expects a ``text_to_speech_file`` method that converts a
+        single text file to an audio file.  This wrapper resolves the correct
+        ElevenLabs *voice_id* by inspecting the filename.  The expected naming
+        convention is that the voice label appears as the last underscore-
+        separated token before the extension (e.g. ``story_Bella.txt`` → voice
+        "Bella").  If no match is found we fall back to the first voice returned
+        by :py:meth:`get_voices`.
+        """
+        # Attempt to extract a potential voice label from the filename
+        voice_label: Optional[str] = None
+        stem_parts = input_path.stem.split("_")
+        if stem_parts:
+            voice_candidate = stem_parts[-1]
+            voice_label = voice_candidate.strip()
+
+        # Convert the label to a voice_id using the existing helper
+        voice_id = self.parse_voice_selection(voice_label or "") if voice_label else None
+
+        # Fallback to first available voice when detection fails
+        if not voice_id and self.voices:
+            voice_id = self.voices[0].get("voice_id")
+
+        if not voice_id:
+            self.progress_callback("Error: Unable to determine voice ID for text-to-speech")
+            logger.error("Unable to determine voice ID for TTS conversion of %s", input_path)
+            return False
+
+        return self.generate_audio(input_path, output_path, voice_id, voice_settings)

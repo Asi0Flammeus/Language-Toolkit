@@ -6,29 +6,35 @@ Provides REST endpoints for all language processing tools
 import asyncio
 import json
 import logging
+import os
 import queue
+import shutil
+import tempfile
 import threading
 import uuid
 from pathlib import Path
-from typing import Dict, List, Optional, Union
-import tempfile
-import shutil
-import os
+from typing import Any, Dict, List, Optional, Union
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Form, Depends
-from fastapi.responses import FileResponse, StreamingResponse
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
 import uvicorn
+from dotenv import load_dotenv
+from fastapi import (BackgroundTasks, Depends, FastAPI, File, Form,
+                     HTTPException, UploadFile)
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel, Field
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Import core functionality modules
 from core.config import ConfigManager
-from core.pptx_translation import PPTXTranslationCore
-from core.transcription import AudioTranscriptionCore
-from core.text_translation import TextTranslationCore
-from core.text_to_speech import TextToSpeechCore
 from core.pptx_converter import PPTXConverterCore
+from core.pptx_translation import PPTXTranslationCore
+from core.s3_utils import S3ClientWrapper
+from core.text_to_speech import TextToSpeechCore
+from core.text_translation import TextTranslationCore
+from core.transcription import AudioTranscriptionCore
 from core.video_merger import VideoMergerCore
 
 # Configure logging
@@ -265,15 +271,25 @@ async def run_pptx_translation_async(task_id: str, input_files: List[Path],
                 
                 for input_file in input_files:
                     if input_file.is_file() and input_file.suffix.lower() == '.pptx':
+                        progress_callback(f"Starting translation of {input_file.name}")
                         output_file = output_dir / f"translated_{input_file.name}"
                         
-                        success = translator.translate_pptx(
-                            input_file, output_file, source_lang, target_lang
-                        )
+                        # Check input file size and existence
+                        progress_callback(f"Input file size: {input_file.stat().st_size} bytes")
+                        
+                        success = translator.translate_pptx(input_file, output_file, source_lang, target_lang)
                         
                         if success:
-                            result_files.append(str(output_file))
+                            # Check output file was created and has content
+                            if output_file.exists():
+                                output_size = output_file.stat().st_size
+                                progress_callback(f"Translation successful. Output file size: {output_size} bytes")
+                                result_files.append(str(output_file))
+                            else:
+                                progress_callback(f"Error: Output file was not created: {output_file}")
+                                raise RuntimeError(f"Translation claimed success but output file missing: {output_file}")
                         else:
+                            progress_callback(f"Translation failed for {input_file.name}")
                             raise RuntimeError(f"Failed to translate {input_file.name}")
                 
                 # Update task with results
@@ -471,7 +487,9 @@ async def root():
             "download_results": "/download/{task_id}",
             "download_single_file": "/download/{task_id}/{file_index}",
             "list_tasks": "/tasks",
-            "cleanup_task": "/tasks/{task_id}"
+            "cleanup_task": "/tasks/{task_id}",
+            "translate_pptx_s3": "/translate/pptx_s3",
+            "transcribe_audio_s3": "/transcribe/audio_s3"
         },
         "notes": {
             "single_file_download": "When a task has only one result file, /download/{task_id} returns the file directly",
@@ -871,8 +889,8 @@ async def download_results(task_id: str, token: str = Depends(verify_token)):
     
     # Multiple files: create zip archive
     logger.info(f"Creating ZIP archive for {len(result_files)} files")
-    import zipfile
     import io
+    import zipfile
     
     zip_buffer = io.BytesIO()
     files_added = 0
@@ -963,6 +981,188 @@ async def list_tasks(token: str = Depends(verify_token)):
             for task_id, task in active_tasks.items()
         ]
     }
+
+# --------------------------------------
+# S3 Request Models
+# --------------------------------------
+class PPTXS3Request(BaseModel):
+    """Request model for translating PPTX files stored in S3."""
+    input_keys: List[str] = Field(..., description="S3 object keys of the input PPTX files")
+    output_prefix: Optional[str] = Field(None, description="Destination S3 prefix for translated files")
+    source_lang: str = Field(..., description="Source language code (e.g., 'en')")
+    target_lang: str = Field(..., description="Target language code (e.g., 'fr')")
+
+
+class AudioS3Request(BaseModel):
+    """Request model for transcribing audio files stored in S3."""
+    input_keys: List[str] = Field(..., description="S3 object keys of the input audio files")
+    output_prefix: Optional[str] = Field(None, description="Destination S3 prefix for transcription results")
+
+# --------------------------------------
+# Background runners for S3 workflows
+# --------------------------------------
+async def run_pptx_translation_s3_async(task_id: str, input_keys: List[str], output_prefix: Optional[str],
+                                       output_dir: Path, source_lang: str, target_lang: str):
+    """Download PPTX from S3, translate, upload results back to S3."""
+    try:
+        active_tasks[task_id]["status"] = "running"
+        api_keys = config_manager.get_api_keys()
+        deepl_key = api_keys.get("deepl")
+        if not deepl_key:
+            raise ValueError("DeepL API key not configured")
+
+        # S3 client
+        s3 = S3ClientWrapper()
+
+        def progress_callback(msg: str):
+            active_tasks[task_id]["messages"].append(msg)
+            logger.info(f"Task {task_id}: {msg}")
+
+        # Download input files
+        temp_input_dir = output_dir.parent / "input"
+        input_files = s3.download_files(input_keys, temp_input_dir)
+
+        # Translator
+        translator = PPTXTranslationCore(deepl_key, progress_callback)
+        result_local_paths: List[Path] = []
+
+        for i, input_file in enumerate(input_files):
+            if input_file.suffix.lower() != ".pptx":
+                raise ValueError(f"Unsupported file type {input_file}")
+            
+            progress_callback(f"Starting translation of {input_file.name}")
+            output_file = output_dir / f"translated_{input_file.name}"
+            
+            # Check input file size and existence
+            progress_callback(f"Input file size: {input_file.stat().st_size} bytes")
+            
+            success = translator.translate_pptx(input_file, output_file, source_lang, target_lang)
+            
+            if success:
+                # Check output file was created and has content
+                if output_file.exists():
+                    output_size = output_file.stat().st_size
+                    progress_callback(f"Translation successful. Output file size: {output_size} bytes")
+                    result_local_paths.append(output_file)
+                else:
+                    progress_callback(f"Error: Output file was not created: {output_file}")
+                    raise RuntimeError(f"Translation claimed success but output file missing: {output_file}")
+            else:
+                progress_callback(f"Translation failed for {input_file.name}")
+                raise RuntimeError(f"Failed to translate {input_file.name}")
+
+        # Upload results using original key structure
+        result_keys = s3.upload_files_with_mapping(result_local_paths, input_keys, output_prefix)
+
+        active_tasks[task_id]["status"] = "completed"
+        active_tasks[task_id]["result_files"] = result_keys
+
+    except Exception as e:
+        logger.error(f"Task {task_id} failed: {e}")
+        active_tasks[task_id]["status"] = "failed"
+        active_tasks[task_id]["error"] = str(e)
+
+
+async def run_audio_transcription_s3_async(task_id: str, input_keys: List[str], output_prefix: Optional[str],
+                                          output_dir: Path):
+    """Download audio from S3, transcribe, upload results back to S3."""
+    try:
+        active_tasks[task_id]["status"] = "running"
+        api_keys = config_manager.get_api_keys()
+        openai_key = api_keys.get("openai")
+        if not openai_key:
+            raise ValueError("OpenAI API key not configured")
+
+        s3 = S3ClientWrapper()
+
+        def progress_callback(msg: str):
+            active_tasks[task_id]["messages"].append(msg)
+            logger.info(f"Task {task_id}: {msg}")
+
+        temp_input_dir = output_dir.parent / "input"
+        input_files = s3.download_files(input_keys, temp_input_dir)
+
+        transcriber = AudioTranscriptionCore(openai_key, progress_callback)
+        result_local_paths: List[Path] = []
+
+        for i, input_file in enumerate(input_files):
+            if not transcriber.validate_audio_file(input_file):
+                raise ValueError(f"Unsupported audio format: {input_file.name}")
+            output_file = output_dir / f"transcript_{input_file.stem}.txt"
+            success = transcriber.transcribe_audio(input_file, output_file)
+            if success:
+                result_local_paths.append(output_file)
+            else:
+                raise RuntimeError(f"Failed to transcribe {input_file.name}")
+
+        # Upload results using original key structure
+        result_keys = s3.upload_files_with_mapping(result_local_paths, input_keys, output_prefix)
+
+        active_tasks[task_id]["status"] = "completed"
+        active_tasks[task_id]["result_files"] = result_keys
+
+    except Exception as e:
+        logger.error(f"Task {task_id} failed: {e}")
+        active_tasks[task_id]["status"] = "failed"
+        active_tasks[task_id]["error"] = str(e)
+
+# --------------------------------------
+# S3 Endpoints
+# --------------------------------------
+@app.post("/translate/pptx_s3", response_model=TaskStatus)
+async def translate_pptx_s3(request: PPTXS3Request, background_tasks: BackgroundTasks, token: str = Depends(verify_token)):
+    """Translate PPTX files stored in S3 and upload results back to S3."""
+    task_id = create_task_id()
+    temp_dir = get_temp_dir()
+    output_dir = temp_dir / "output"
+    output_dir.mkdir(parents=True)
+
+    active_tasks[task_id] = {
+        "status": "pending",
+        "temp_dir": temp_dir,
+        "input_files": request.input_keys,  # store keys instead of paths
+        "output_dir": output_dir,
+        "messages": []
+    }
+
+    background_tasks.add_task(
+        run_pptx_translation_s3_async,
+        task_id,
+        request.input_keys,
+        request.output_prefix,
+        output_dir,
+        request.source_lang,
+        request.target_lang
+    )
+
+    return TaskStatus(task_id=task_id, status="pending")
+
+
+@app.post("/transcribe/audio_s3", response_model=TaskStatus)
+async def transcribe_audio_s3(request: AudioS3Request, background_tasks: BackgroundTasks, token: str = Depends(verify_token)):
+    """Transcribe audio files stored in S3 and upload transcripts back to S3."""
+    task_id = create_task_id()
+    temp_dir = get_temp_dir()
+    output_dir = temp_dir / "output"
+    output_dir.mkdir(parents=True)
+
+    active_tasks[task_id] = {
+        "status": "pending",
+        "temp_dir": temp_dir,
+        "input_files": request.input_keys,
+        "output_dir": output_dir,
+        "messages": []
+    }
+
+    background_tasks.add_task(
+        run_audio_transcription_s3_async,
+        task_id,
+        request.input_keys,
+        request.output_prefix,
+        output_dir
+    )
+
+    return TaskStatus(task_id=task_id, status="pending")
 
 if __name__ == "__main__":
     # Run the server

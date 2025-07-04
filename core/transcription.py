@@ -27,9 +27,10 @@ Supported Audio Formats:
 """
 
 import logging
-import openai
 from pathlib import Path
-from typing import Optional, Callable, Dict, Any
+from typing import Any, Callable, Dict, Optional
+
+import openai
 
 logger = logging.getLogger(__name__)
 
@@ -141,3 +142,13 @@ class AudioTranscriptionCore:
     def get_supported_formats(self) -> list:
         """Get list of supported audio formats."""
         return ['.mp3', '.wav', '.m4a', '.ogg', '.flac', '.webm']
+
+    def transcribe_audio_file(self, input_path: Path, output_path: Path, language: Optional[str] = None) -> bool:
+        """Backward-compatibility wrapper.
+
+        api_server.py historically expected a ``transcribe_audio_file`` method.  The
+        core implementation was later renamed to :py:meth:`transcribe_audio`.  To
+        avoid breaking the public API we provide this thin wrapper that simply
+        delegates to the new name.
+        """
+        return self.transcribe_audio(input_path, output_path, language)
