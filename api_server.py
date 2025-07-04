@@ -12,6 +12,7 @@ import shutil
 import tempfile
 import threading
 import uuid
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -21,7 +22,8 @@ from fastapi import (BackgroundTasks, Depends, FastAPI, File, Form,
                      HTTPException, UploadFile)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from jose import JWTError, jwt
 from pydantic import BaseModel, Field
 
 # Load environment variables from .env file
@@ -62,39 +64,48 @@ active_tasks: Dict[str, Dict] = {}
 config_manager = ConfigManager(use_project_api_keys=True)
 
 # Authentication setup
-security = HTTPBearer()
+security = OAuth2PasswordBearer(tokenUrl="token")
 
-def load_auth_tokens() -> List[str]:
-    """Load whitelisted authentication tokens from auth_tokens.json"""
+# -----------------------------
+# JWT Auth configuration
+# -----------------------------
+SECRET_KEY = os.getenv("SECRET_KEY", "CHANGE_ME")  # Override in production
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
+
+def load_client_credentials() -> Dict[str, str]:
+    """Load allowed client_id -> client_secret mapping from client_credentials.json
+    This avoids the need for a database while still supporting credential rotation.
+    """
+    credentials: Dict[str, str] = {}
+    cred_file = Path(__file__).parent / "client_credentials.json"
     try:
-        auth_file = Path(__file__).parent / "auth_tokens.json"
-        if auth_file.exists():
-            with open(auth_file, 'r', encoding='utf-8') as f:
-                auth_data = json.load(f)
-                return auth_data.get("tokens", [])
+        if cred_file.exists():
+            with open(cred_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                for entry in data.get("clients", []):
+                    cid = entry.get("client_id")
+                    csec = entry.get("client_secret")
+                    if cid and csec:
+                        credentials[cid] = csec
         else:
-            logger.warning(f"Auth tokens file not found: {auth_file}")
-            return []
-    except Exception as e:
-        logger.error(f"Failed to load auth tokens: {e}")
-        return []
+            logger.warning(f"Client credentials file not found: {cred_file}")
+    except Exception as exc:
+        logger.error(f"Failed to load client credentials: {exc}")
+    return credentials
 
-# Load authorized tokens
-AUTHORIZED_TOKENS = load_auth_tokens()
+CLIENT_CREDENTIALS = load_client_credentials()
 
-async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Verify the provided authentication token"""
-    if not AUTHORIZED_TOKENS:
-        logger.warning("No authorized tokens configured - allowing all requests")
-        return credentials.credentials
-    
-    if credentials.credentials not in AUTHORIZED_TOKENS:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid authentication token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    return credentials.credentials
+async def verify_token(token: str = Depends(security)):
+    """Validate JWT access token and return the associated client_id."""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        client_id: Optional[str] = payload.get("sub")
+        if client_id is None:
+            raise HTTPException(status_code=401, detail="Invalid token payload", headers={"WWW-Authenticate": "Bearer"})
+        return client_id
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token", headers={"WWW-Authenticate": "Bearer"})
 
 async def run_tool_async(tool_class, task_id: str, input_files: List[Path], 
                         output_dir: Path, **kwargs):
@@ -486,6 +497,7 @@ async def root():
             "task_status": "/tasks/{task_id}",
             "download_results": "/download/{task_id}",
             "download_single_file": "/download/{task_id}/{file_index}",
+            "token": "/token",
             "list_tasks": "/tasks",
             "cleanup_task": "/tasks/{task_id}",
             "translate_pptx_s3": "/translate/pptx_s3",
@@ -502,6 +514,28 @@ async def root():
 async def health_check():
     """Health check endpoint"""
     return {"status": "healthy", "message": "API is running"}
+
+@app.post("/token")
+async def generate_token(form_data: OAuth2PasswordRequestForm = Depends()):
+    """Exchange client_id / client_secret for a short-lived JWT access token."""
+    client_id = form_data.username
+    client_secret = form_data.password
+
+    # Validate credentials if any configured; allow all if list is empty
+    if CLIENT_CREDENTIALS:
+        expected_secret = CLIENT_CREDENTIALS.get(client_id)
+        if expected_secret != client_secret:
+            raise HTTPException(status_code=401, detail="Invalid client credentials")
+
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode = {"sub": client_id, "exp": expire}
+    access_token = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    }
 
 @app.post("/translate/pptx", response_model=TaskStatus)
 async def translate_pptx(
