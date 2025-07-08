@@ -114,6 +114,26 @@ POST /tts
 ```
 - **Files**: Upload TXT files (must contain voice name in filename)
 
+#### Text Translation from S3
+```
+POST /translate/text_s3
+```
+- **JSON Body**:
+  - `input_keys`: Array of S3 object keys for the input TXT files
+  - `output_prefix`: (Optional) Destination S3 prefix for translated files
+  - `source_lang`: Source language code (e.g., "en")
+  - `target_lang`: Target language code (e.g., "fr")
+
+#### Course Translation from S3
+```
+POST /translate/course_s3
+```
+- **JSON Body**:
+  - `course_id`: Unique identifier for the course
+  - `source_lang`: Current language present in S3 folder
+  - `target_langs`: Array of target language codes (e.g., ["fr", "it"])
+  - `output_prefix`: (Optional) Root prefix where translated course will be written
+
 #### PPTX Translation from S3
 ```
 POST /translate/pptx_s3
@@ -162,20 +182,46 @@ curl -H "Authorization: Bearer token_admin_abc123def456" \
   -O "http://localhost:8000/download/{task_id}/0"
 ```
 
-4. **Translate a PPTX stored in S3**:
+4. **Translate a TXT file stored in S3**:
+```bash
+curl -X POST "http://localhost:8000/translate/text_s3" \
+  -H "Authorization: Bearer token_admin_abc123def456" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "input_keys": ["bucket/folder/document.txt"],
+        "output_prefix": "translated/",
+        "source_lang": "en",
+        "target_lang": "fr"
+      }'
+```
+
+5. **Translate a PPTX stored in S3**:
 ```bash
 curl -X POST "http://localhost:8000/translate/pptx_s3" \
   -H "Authorization: Bearer token_admin_abc123def456" \
   -H "Content-Type: application/json" \
   -d '{
         "input_keys": ["bucket/folder/presentation.pptx"],
-        "output_prefix": "translated_",
+        "output_prefix": "translated/",
         "source_lang": "en",
         "target_lang": "fr"
       }'
 ```
 
-5. **Transcribe an audio file stored in S3**:
+6. **Translate an entire course from S3**:
+```bash
+curl -X POST "http://localhost:8000/translate/course_s3" \
+  -H "Authorization: Bearer token_admin_abc123def456" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "course_id": "cad798e6-3acf-11f0-b82c-771d758cf407",
+        "source_lang": "en",
+        "target_langs": ["fr", "it"],
+        "output_prefix": "translated/"
+      }'
+```
+
+7. **Transcribe an audio file stored in S3**:
 ```bash
 curl -X POST "http://localhost:8000/transcribe/audio_s3" \
   -H "Authorization: Bearer token_admin_abc123def456" \

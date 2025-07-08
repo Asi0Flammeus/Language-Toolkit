@@ -134,3 +134,27 @@ class S3ClientWrapper:
             s3_keys.append(key)
             
         return s3_keys 
+
+    # ------------------------------------------------------------------
+    # Listing helpers
+    # ------------------------------------------------------------------
+    def list_files(self, prefix: str, extensions: Optional[List[str]] = None) -> List[str]:
+        """List all object keys under *prefix* (non-recursive) optionally filtered by *extensions*.
+
+        Args:
+            prefix: S3 key prefix to search (must end with '/')
+            extensions: list like ['.pptx', '.txt']; comparison is case-insensitive.
+
+        Returns:
+            List of S3 keys.
+        """
+        paginator = self._client.get_paginator("list_objects_v2")
+        keys: List[str] = []
+        for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                key = obj["Key"]
+                if extensions:
+                    if not any(key.lower().endswith(ext.lower()) for ext in extensions):
+                        continue
+                keys.append(key)
+        return keys 

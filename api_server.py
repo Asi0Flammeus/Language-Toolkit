@@ -501,7 +501,9 @@ async def root():
             "list_tasks": "/tasks",
             "cleanup_task": "/tasks/{task_id}",
             "translate_pptx_s3": "/translate/pptx_s3",
-            "transcribe_audio_s3": "/transcribe/audio_s3"
+            "transcribe_audio_s3": "/transcribe/audio_s3",
+            "translate_text_s3": "/translate/text_s3",
+            "translate_course_s3": "/translate/course_s3"
         },
         "notes": {
             "single_file_download": "When a task has only one result file, /download/{task_id} returns the file directly",
@@ -1032,6 +1034,25 @@ class AudioS3Request(BaseModel):
     input_keys: List[str] = Field(..., description="S3 object keys of the input audio files")
     output_prefix: Optional[str] = Field(None, description="Destination S3 prefix for transcription results")
 
+# New request model for translating text files stored in S3
+class TextS3Request(BaseModel):
+    """Request model for translating text files stored in S3."""
+    input_keys: List[str] = Field(..., description="S3 object keys of the input text files (.txt)")
+    output_prefix: Optional[str] = Field(None, description="Destination S3 prefix for translated files")
+    source_lang: str = Field(..., description="Source language code (e.g., 'en')")
+    target_lang: str = Field(..., description="Target language code (e.g., 'fr')")
+
+# --------------------------------------
+# Course Translation S3 Request
+# --------------------------------------
+
+class CourseS3Request(BaseModel):
+    """Request model for translating all PPTX & TXT of a course from S3."""
+    course_id: str = Field(..., description="Unique identifier of the course")
+    source_lang: str = Field(..., description="Language currently present in S3")
+    target_langs: List[str] = Field(..., description="List of target language codes")
+    output_prefix: Optional[str] = Field(None, description="Optional root prefix for translated course (defaults to original 'contribute/')")
+
 # --------------------------------------
 # Background runners for S3 workflows
 # --------------------------------------
@@ -1141,6 +1162,222 @@ async def run_audio_transcription_s3_async(task_id: str, input_keys: List[str], 
         active_tasks[task_id]["error"] = str(e)
 
 # --------------------------------------
+# Background runner for Course Translation (TXT + PPTX) from S3
+# --------------------------------------
+
+async def run_course_translation_s3_async(task_id: str, course_id: str, source_lang: str, target_langs: List[str],
+                                         output_prefix: Optional[str], temp_dir: Path):
+    """Translate all .pptx and .txt for given course and upload results back preserving structure."""
+    try:
+        active_tasks[task_id]["status"] = "running"
+
+        api_keys = config_manager.get_api_keys()
+        deepl_key = api_keys.get("deepl")
+        if not deepl_key:
+            raise ValueError("DeepL API key not configured")
+
+        s3 = S3ClientWrapper()
+
+        source_prefix = f"contribute/{course_id}/{source_lang}/"
+
+        def progress(msg: str):
+            active_tasks[task_id]["messages"].append(msg)
+            logger.info(f"Task {task_id}: {msg}")
+
+        # List all pptx & txt keys under source_prefix
+        keys = [k for k in s3.list_files(source_prefix, extensions=[".pptx", ".txt"]) if not Path(k).name.startswith('.')]
+        if not keys:
+            raise RuntimeError(f"No .pptx or .txt files found under {source_prefix}")
+
+        progress(f"Found {len(keys)} files to process")
+
+        # Prepare translators
+        pptx_translator = PPTXTranslationCore(deepl_key, progress)
+        text_translator = TextTranslationCore(deepl_key, progress)
+
+        manifest: Dict[str, Any] = {}
+
+        def insert_manifest(path_parts: List[str], value: str):
+            node = manifest
+            for part in path_parts[:-1]:
+                node = node.setdefault(part, {})
+            node[path_parts[-1]] = value
+
+        input_dir = temp_dir / "input"
+        output_dir = temp_dir / "output"
+        input_dir.mkdir(parents=True)
+        output_dir.mkdir(parents=True)
+
+        # Build mapping from TXT filenames to slide_id
+        import shutil
+        import uuid
+        slide_id_cache: Dict[Tuple[str, str, str], str] = {}  # (part_id, chapter_id, stem) -> uuid
+        for key in keys:
+            if key.lower().endswith('.txt') and not Path(key).name.startswith('.'):
+                rel = "/".join(Path(key).parts[3:])
+                parts = rel.split('/')  # part_id/chapter_id/text/filename
+                if len(parts) == 4 and parts[2] == 'text':
+                    part_id, chapter_id, _, filename = parts
+                    stem = Path(filename).stem
+                    slide_id_cache.setdefault((part_id, chapter_id, stem), uuid.uuid4().hex)
+
+        # Download all files
+        local_files = s3.download_files(keys, input_dir)
+        key_to_local = dict(zip(keys, local_files))
+
+
+        # -----------------------------------------------------------
+        # Organise files by (part_id, chapter_id)
+        # -----------------------------------------------------------
+
+        from collections import defaultdict
+        chapter_txts: Dict[Tuple[str, str], List[Tuple[str, str, Path]]] = defaultdict(list)  # (part,chap) -> [(stem, slide_id, local_path)]
+        chapter_pptx: Dict[Tuple[str, str], Path] = {}
+
+        for src_key, local_path in key_to_local.items():
+            if Path(src_key).name.startswith('.'):
+                continue
+
+            rel = "/".join(Path(src_key).parts[3:])
+            parts = rel.split('/')
+            if len(parts) < 4:
+                continue
+            part_id, chapter_id, folder_type, filename = parts[0], parts[1], parts[2], parts[3]
+
+            if folder_type == 'text':
+                stem = Path(filename).stem
+                slide_id = slide_id_cache.setdefault((part_id, chapter_id, stem), uuid.uuid4().hex)
+                chapter_txts[(part_id, chapter_id)].append((stem, slide_id, local_path))
+            elif folder_type == 'pptx' and filename.lower().endswith('.pptx'):
+                chapter_pptx[(part_id, chapter_id)] = local_path
+
+        # -----------------------------------------------------------
+        # Process per chapter & per target language
+        # -----------------------------------------------------------
+
+        from core.pptx_utils import split_pptx_to_single_slides
+
+        for (part_id, chapter_id), pptx_path in chapter_pptx.items():
+            txt_entries = sorted(chapter_txts.get((part_id, chapter_id), []), key=lambda x: int(x[0]) if x[0].isdigit() else x[0])
+            if not txt_entries:
+                progress(f"No TXT files for chapter {part_id}/{chapter_id}, skipping PPTX")
+                continue
+
+            stems = [stem for stem, _, _ in txt_entries]
+
+            for target_lang in target_langs:
+                # Translate full pptx once per target language per chapter
+                translated_full = output_dir / f"translated_{target_lang}_{part_id}_{chapter_id}.pptx"
+                success = pptx_translator.translate_pptx(pptx_path, translated_full, source_lang, target_lang)
+                if not success:
+                    raise RuntimeError(f"Failed to translate PPTX {pptx_path} to {target_lang}")
+
+                # Split into slides with filenames matching stems + .pptx
+                slide_filenames = [f"{stem}.pptx" for stem in stems]
+                split_out_dir = output_dir / "slides_split"
+                split_out_dir.mkdir(parents=True, exist_ok=True)
+
+                slide_paths = split_pptx_to_single_slides(translated_full, split_out_dir, slide_filenames)
+
+                for (stem, slide_id, _), slide_path in zip(txt_entries, slide_paths):
+                    # Target key
+                    target_rel_key = f"{part_id}/{chapter_id}/{slide_id}/pptx/{stem}.pptx"
+                    root_prefix = output_prefix.rstrip('/') + '/' if output_prefix else 'contribute/'
+                    target_key = f"{root_prefix}{course_id}/{target_lang}/{target_rel_key}"
+
+                    s3._client.upload_file(str(slide_path), s3.bucket, target_key)
+
+                    # Manifest
+                    insert_manifest([course_id, target_lang, part_id, chapter_id, slide_id, 'pptx'], f"{stem}.pptx")
+
+            # Process TXT files now (they are common to all langs)
+            for (stem, slide_id, txt_local) in txt_entries:
+                for target_lang in target_langs:
+                    target_rel_key = f"{part_id}/{chapter_id}/{slide_id}/text/{stem}.txt"
+                    root_prefix = output_prefix.rstrip('/') + '/' if output_prefix else 'contribute/'
+                    target_key = f"{root_prefix}{course_id}/{target_lang}/{target_rel_key}"
+
+                    local_out_path = output_dir / target_lang / part_id / chapter_id / slide_id / 'text' / f"{stem}.txt"
+                    local_out_path.parent.mkdir(parents=True, exist_ok=True)
+
+                    success = text_translator.translate_text_file(txt_local, local_out_path, source_lang, target_lang)
+                    if not success:
+                        raise RuntimeError(f"Failed to translate TXT {txt_local}")
+
+                    s3._client.upload_file(str(local_out_path), s3.bucket, target_key)
+
+                    insert_manifest([course_id, target_lang, part_id, chapter_id, slide_id, 'text'], f"{stem}.txt")
+
+        # Save manifest locally and upload
+        manifest_path = output_dir / "manifest.json"
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2)
+
+        manifest_key = f"{output_prefix.rstrip('/') + '/' if output_prefix else 'contribute/'}{course_id}/manifest.json"
+        s3._client.upload_file(str(manifest_path), s3.bucket, manifest_key)
+
+        active_tasks[task_id]["status"] = "completed"
+        active_tasks[task_id]["result_files"] = [manifest_key]
+
+    except Exception as e:
+        logger.error(f"Course task {task_id} failed: {e}")
+        active_tasks[task_id]["status"] = "failed"
+        active_tasks[task_id]["error"] = str(e)
+    finally:
+        # Clean temporary directory to avoid disk bloat
+        cleanup_temp_dir(temp_dir)
+
+# --------------------------------------
+# Background runner for Text Translation from S3
+# --------------------------------------
+
+async def run_text_translation_s3_async(task_id: str, input_keys: List[str], output_prefix: Optional[str],
+                                       output_dir: Path, source_lang: str, target_lang: str):
+    """Download .txt files from S3, translate, upload back to S3."""
+    try:
+        active_tasks[task_id]["status"] = "running"
+        api_keys = config_manager.get_api_keys()
+        deepl_key = api_keys.get("deepl")
+        if not deepl_key:
+            raise ValueError("DeepL API key not configured")
+
+        s3 = S3ClientWrapper()
+
+        def progress_callback(msg: str):
+            active_tasks[task_id]["messages"].append(msg)
+            logger.info(f"Task {task_id}: {msg}")
+
+        temp_input_dir = output_dir.parent / "input"
+        input_files = s3.download_files(input_keys, temp_input_dir)
+
+        translator = TextTranslationCore(deepl_key, progress_callback)
+        result_local_paths: List[Path] = []
+
+        for input_file in input_files:
+            if input_file.suffix.lower() != ".txt":
+                raise ValueError(f"Unsupported file type {input_file}")
+
+            output_file = output_dir / f"translated_{input_file.name}"
+            progress_callback(f"Translating {input_file.name}")
+
+            success = translator.translate_text_file(input_file, output_file, source_lang, target_lang)
+            if success:
+                result_local_paths.append(output_file)
+            else:
+                raise RuntimeError(f"Failed to translate {input_file.name}")
+
+        # Upload preserving structure
+        result_keys = s3.upload_files_with_mapping(result_local_paths, input_keys, output_prefix)
+
+        active_tasks[task_id]["status"] = "completed"
+        active_tasks[task_id]["result_files"] = result_keys
+
+    except Exception as e:
+        logger.error(f"Task {task_id} failed: {e}")
+        active_tasks[task_id]["status"] = "failed"
+        active_tasks[task_id]["error"] = str(e)
+
+# --------------------------------------
 # S3 Endpoints
 # --------------------------------------
 @app.post("/translate/pptx_s3", response_model=TaskStatus)
@@ -1194,6 +1431,78 @@ async def transcribe_audio_s3(request: AudioS3Request, background_tasks: Backgro
         request.input_keys,
         request.output_prefix,
         output_dir
+    )
+
+    return TaskStatus(task_id=task_id, status="pending")
+
+
+# --------------------------------------
+# Text Translation S3 Endpoint
+# --------------------------------------
+
+
+@app.post("/translate/text_s3", response_model=TaskStatus)
+async def translate_text_s3(
+    request: TextS3Request,
+    background_tasks: BackgroundTasks,
+    token: str = Depends(verify_token)
+):
+    """Translate text files stored in S3 and upload results back to S3."""
+    task_id = create_task_id()
+    temp_dir = get_temp_dir()
+    output_dir = temp_dir / "output"
+    output_dir.mkdir(parents=True)
+
+    active_tasks[task_id] = {
+        "status": "pending",
+        "temp_dir": temp_dir,
+        "input_files": request.input_keys,
+        "output_dir": output_dir,
+        "messages": []
+    }
+
+    background_tasks.add_task(
+        run_text_translation_s3_async,
+        task_id,
+        request.input_keys,
+        request.output_prefix,
+        output_dir,
+        request.source_lang,
+        request.target_lang,
+    )
+
+    return TaskStatus(task_id=task_id, status="pending")
+
+# --------------------------------------
+# Course Translation Endpoint
+# --------------------------------------
+
+
+@app.post("/translate/course_s3", response_model=TaskStatus)
+async def translate_course_s3(
+    request: CourseS3Request,
+    background_tasks: BackgroundTasks,
+    token: str = Depends(verify_token)
+):
+    """Translate all PPTX & TXT for a course in S3 to multiple target languages."""
+
+    task_id = create_task_id()
+    temp_dir = get_temp_dir()
+
+    active_tasks[task_id] = {
+        "status": "pending",
+        "temp_dir": temp_dir,
+        "messages": []
+    }
+
+    background_tasks.add_task(
+        run_course_translation_s3_async,
+        task_id,
+        request.course_id,
+        request.source_lang,
+        request.target_langs,
+        request.output_prefix,
+        temp_dir,
     )
 
     return TaskStatus(task_id=task_id, status="pending")
