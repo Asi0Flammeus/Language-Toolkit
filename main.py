@@ -1857,6 +1857,206 @@ class SequentialProcessingTool(ToolBase, LanguageSelectionMixin):
             logging.exception("Error during multiple language processing")
 
 
+class PPTXRewardEvaluatorTool(ToolBase):
+    """
+    Evaluates proofreading rewards for PPTX files based on text box count and word count.
+    Supports both single files and recursive folder processing.
+    """
+
+    def __init__(self, master, config_manager, progress_queue):
+        super().__init__(master, config_manager, progress_queue)
+        self.supported_extensions = {'.pptx', '.ppt'}
+        
+        # Additional variables specific to this tool
+        self.presentation_mode = tk.StringVar(value="auto")  # auto, image, video
+        self.selected_language = tk.StringVar(value="en")
+        self.results = []
+        
+        # Initialize the evaluator
+        from core.pptx_reward_evaluator import PPTXRewardEvaluator
+        self.evaluator = PPTXRewardEvaluator()
+
+    def create_specific_controls(self, parent_frame):
+        """Creates UI elements specific to this tool."""
+        
+        # Language selection
+        lang_frame = ttk.LabelFrame(parent_frame, text="Language Selection")
+        lang_frame.pack(fill='x', padx=5, pady=5)
+        
+        lang_label = ttk.Label(lang_frame, text="Target Language:")
+        lang_label.pack(side=tk.LEFT, padx=5)
+        
+        # Get available languages from the evaluator
+        languages = list(self.evaluator.language_factors.keys())
+        lang_combo = ttk.Combobox(lang_frame, textvariable=self.selected_language, 
+                                 values=languages, state="readonly")
+        lang_combo.pack(side=tk.LEFT, padx=5)
+        
+        # Presentation mode selection
+        mode_frame = ttk.LabelFrame(parent_frame, text="Presentation Mode")
+        mode_frame.pack(fill='x', padx=5, pady=5)
+        
+        ttk.Radiobutton(mode_frame, text="Auto-detect", 
+                       variable=self.presentation_mode, 
+                       value="auto").pack(side=tk.LEFT, padx=10)
+        ttk.Radiobutton(mode_frame, text="Image PPTX (factor 1.5)", 
+                       variable=self.presentation_mode, 
+                       value="image").pack(side=tk.LEFT, padx=10)
+        ttk.Radiobutton(mode_frame, text="Video PPTX (factor 1.0)", 
+                       variable=self.presentation_mode, 
+                       value="video").pack(side=tk.LEFT, padx=10)
+        
+        # Results display frame
+        results_frame = ttk.LabelFrame(parent_frame, text="Results")
+        results_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        # Results text widget with scrollbar
+        text_frame = ttk.Frame(results_frame)
+        text_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        self.results_text = tk.Text(text_frame, height=10, wrap=tk.WORD)
+        results_scrollbar = ttk.Scrollbar(text_frame, orient="vertical", 
+                                        command=self.results_text.yview)
+        self.results_text.configure(yscrollcommand=results_scrollbar.set)
+        
+        self.results_text.pack(side=tk.LEFT, fill='both', expand=True)
+        results_scrollbar.pack(side=tk.RIGHT, fill='y')
+        
+        # CSV export button
+        export_frame = ttk.Frame(parent_frame)
+        export_frame.pack(fill='x', padx=5, pady=5)
+        
+        self.export_button = ttk.Button(export_frame, text="Export Results to CSV", 
+                                       command=self.export_to_csv, state=tk.DISABLED)
+        self.export_button.pack(side=tk.LEFT, padx=5)
+
+    def before_processing(self):
+        """Setup before processing starts."""
+        self.results = []
+        self.results_text.configure(state='normal')
+        self.results_text.delete(1.0, tk.END)
+        self.results_text.configure(state='disabled')
+        self.export_button.configure(state=tk.DISABLED)
+
+    def process_file(self, input_file: Path, output_dir: Path):
+        """Process a single PPTX file for reward evaluation."""
+        try:
+            self.send_progress_update(f"Evaluating {input_file.name}...")
+            
+            # Evaluate the PPTX file
+            result = self.evaluator.evaluate_pptx(
+                str(input_file), 
+                self.selected_language.get(), 
+                self.presentation_mode.get()
+            )
+            
+            self.results.append(result)
+            
+            # Display results
+            if 'error' in result:
+                self.send_progress_update(f"ERROR: {result['error']}")
+                self.update_results_display()
+                return False
+            else:
+                total_reward = result['total_reward']
+                total_slides = result['total_slides']
+                total_text_boxes = result['total_text_boxes']
+                total_words = result['total_words']
+                
+                self.send_progress_update(f"✅ {input_file.name}")
+                self.send_progress_update(f"   Reward: €{total_reward:.4f}")
+                self.send_progress_update(f"   Slides: {total_slides}, Text boxes: {total_text_boxes}, Words: {total_words}")
+                
+                self.update_results_display()
+                return True
+                
+        except Exception as e:
+            error_msg = f"Failed to evaluate {input_file.name}: {str(e)}"
+            self.send_progress_update(f"ERROR: {error_msg}")
+            logging.error(error_msg, exc_info=True)
+            return False
+
+    def update_results_display(self):
+        """Update the results display widget."""
+        self.results_text.configure(state='normal')
+        self.results_text.delete(1.0, tk.END)
+        
+        if not self.results:
+            self.results_text.insert(tk.END, "No results yet...")
+            self.results_text.configure(state='disabled')
+            return
+        
+        # Calculate totals
+        total_reward = sum(r.get('total_reward', 0) for r in self.results)
+        total_files = len(self.results)
+        successful_files = len([r for r in self.results if 'error' not in r])
+        
+        # Header
+        self.results_text.insert(tk.END, f"PPTX Reward Evaluation Results\n")
+        self.results_text.insert(tk.END, f"="*50 + "\n\n")
+        self.results_text.insert(tk.END, f"Total Files: {total_files}\n")
+        self.results_text.insert(tk.END, f"Successfully Processed: {successful_files}\n")
+        self.results_text.insert(tk.END, f"Total Reward: €{total_reward:.4f}\n\n")
+        
+        # Individual results
+        for result in self.results:
+            filename = result.get('filename', 'Unknown')
+            if 'error' in result:
+                self.results_text.insert(tk.END, f"❌ {filename}: {result['error']}\n")
+            else:
+                reward = result.get('total_reward', 0)
+                slides = result.get('total_slides', 0)
+                text_boxes = result.get('total_text_boxes', 0)
+                words = result.get('total_words', 0)
+                mode = result.get('mode', 'unknown')
+                
+                self.results_text.insert(tk.END, f"✅ {filename}\n")
+                self.results_text.insert(tk.END, f"   Reward: €{reward:.4f}\n")
+                self.results_text.insert(tk.END, f"   Slides: {slides}, Text boxes: {text_boxes}, Words: {words}\n")
+                self.results_text.insert(tk.END, f"   Mode: {mode}\n\n")
+        
+        self.results_text.configure(state='disabled')
+        
+        # Enable export button if we have results
+        if self.results:
+            self.export_button.configure(state=tk.NORMAL)
+
+    def export_to_csv(self):
+        """Export results to CSV file."""
+        if not self.results:
+            messagebox.showwarning("No Results", "No results to export.")
+            return
+        
+        # Ask user for CSV file location
+        csv_file = filedialog.asksaveasfilename(
+            title="Save Results as CSV",
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+        )
+        
+        if csv_file:
+            try:
+                self.evaluator.save_results_to_csv(self.results, csv_file)
+                self.send_progress_update(f"Results exported to: {csv_file}")
+                messagebox.showinfo("Export Successful", f"Results exported to:\n{csv_file}")
+            except Exception as e:
+                error_msg = f"Failed to export CSV: {str(e)}"
+                self.send_progress_update(f"ERROR: {error_msg}")
+                messagebox.showerror("Export Error", error_msg)
+
+    def after_processing(self):
+        """Cleanup after processing is complete."""
+        self.send_progress_update("Reward evaluation completed.")
+        self.update_results_display()
+
+    def get_all_files_recursive(self, directory: Path):
+        """Get all supported files from directory recursively."""
+        files = []
+        for ext in self.supported_extensions:
+            files.extend(directory.rglob(f"*{ext}"))
+        return files
+
+
 class MainApp(TkinterDnD.Tk):
     """Main application class."""
 
@@ -1913,6 +2113,7 @@ class MainApp(TkinterDnD.Tk):
         self.text_to_speech_tool = self.create_tool_tab("Text to Speech", TextToSpeechTool)  
         self.video_merge_tool = self.create_tool_tab("Video Merge", VideoMergeTool)
         self.sequential_tool = self.create_tool_tab("Sequential Processing", SequentialProcessingTool)
+        self.pptx_reward_evaluator_tool = self.create_tool_tab("PPTX Reward Evaluator", PPTXRewardEvaluatorTool)
 
         # Bottom pane: Progress Text Area
         self.bottom_frame = ttk.Frame(self.main_paned)
@@ -1945,7 +2146,8 @@ class MainApp(TkinterDnD.Tk):
             PPTXtoPDFTool: "pptx_to_pdf_png",
             TextToSpeechTool: "text_to_speech",
             VideoMergeTool: "video_merge",
-            SequentialProcessingTool: "sequential_processing"
+            SequentialProcessingTool: "sequential_processing",
+            PPTXRewardEvaluatorTool: "pptx_reward_evaluator"
         }
         
         # Get tool description key

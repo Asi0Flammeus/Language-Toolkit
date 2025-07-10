@@ -60,6 +60,13 @@ def get_tool_descriptions():
             "description": "Run multiple tools in sequence for complete workflow automation",
             "details": "Chains together translation, conversion, and audio generation for end-to-end processing",
             "use_case": "Automates complex workflows like creating multilingual video presentations"
+        },
+        
+        "pptx_reward_evaluator": {
+            "title": "PPTX Reward Evaluator",
+            "description": "Calculate proofreading rewards for PowerPoint presentations",
+            "details": "Evaluates text boxes and word counts to determine proofreading compensation based on language difficulty",
+            "use_case": "Perfect for calculating fair payment for proofreading services on presentations"
         }
     }
 
@@ -104,6 +111,11 @@ def get_tool_requirements():
         "sequential_processing": {
             "api_required": "Multiple",
             "api_description": "Requires API keys for the selected tools in the sequence"
+        },
+        
+        "pptx_reward_evaluator": {
+            "api_required": None,
+            "api_description": "No API key required (uses local PPTX analysis)"
         }
     }
 
@@ -155,6 +167,12 @@ def get_supported_formats():
             "input": ["Various"],
             "output": ["Various"],
             "notes": "Depends on selected tools in the sequence"
+        },
+        
+        "pptx_reward_evaluator": {
+            "input": [".pptx", ".ppt"],
+            "output": [".csv"],
+            "notes": "Analyzes PowerPoint files and exports reward calculations"
         }
     }
 
@@ -206,6 +224,12 @@ def get_quick_tips():
             "Configure all required API keys before starting",
             "Review the processing order before running",
             "Total time depends on all selected operations"
+        ],
+        
+        "pptx_reward_evaluator": [
+            "Select the appropriate language for accurate difficulty factors",
+            "Choose between image (1.5x) and video (1.0x) presentation modes",
+            "Use recursive processing for multiple presentations in folders"
         ]
     }
 
