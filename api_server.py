@@ -107,22 +107,22 @@ async def verify_token(token: str = Depends(security)):
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token", headers={"WWW-Authenticate": "Bearer"})
 
-async def run_tool_async(tool_class, task_id: str, input_files: List[Path], 
+async def run_tool_async(tool_class, task_id: str, input_files: List[Path],
                         output_dir: Path, **kwargs):
     """Run a core tool asynchronously"""
     try:
         # Update task status
         active_tasks[task_id]["status"] = "running"
-        
+
         # Get API keys
         api_keys = config_manager.get_api_keys()
-        
+
         # Progress callback
         def progress_callback(message: str):
             if "messages" in active_tasks[task_id]:
                 active_tasks[task_id]["messages"].append(message)
             logger.info(f"Task {task_id}: {message}")
-        
+
         # Initialize tool based on type
         if tool_class == TextTranslationCore:
             deepl_key = api_keys.get("deepl")
@@ -141,19 +141,19 @@ async def run_tool_async(tool_class, task_id: str, input_files: List[Path],
             tool = TextToSpeechCore(elevenlabs_key, progress_callback)
         else:
             raise ValueError(f"Unsupported tool class: {tool_class}")
-        
+
         # Run processing in thread
         def process_files():
             try:
                 result_files = []
-                
+
                 for input_file in input_files:
                     if input_file.is_file():
                         if tool_class == TextTranslationCore:
                             # Text translation
                             output_file = output_dir / f"translated_{input_file.name}"
                             success = tool.translate_text_file(
-                                input_file, output_file, 
+                                input_file, output_file,
                                 kwargs.get("source_lang"), kwargs.get("target_lang")
                             )
                             if success:
@@ -170,26 +170,26 @@ async def run_tool_async(tool_class, task_id: str, input_files: List[Path],
                             success = tool.text_to_speech_file(input_file, output_file)
                             if success:
                                 result_files.append(str(output_file))
-                
+
                 # Update task with results
                 active_tasks[task_id]["status"] = "completed"
                 active_tasks[task_id]["result_files"] = result_files
-                
+
             except Exception as e:
                 logger.error(f"Task {task_id} failed: {e}")
                 active_tasks[task_id]["status"] = "failed"
                 active_tasks[task_id]["error"] = str(e)
-        
+
         # Run in thread
         thread = threading.Thread(target=process_files)
         thread.start()
-        
+
         # Wait for completion
         while thread.is_alive():
             await asyncio.sleep(0.5)
-        
+
         thread.join()
-        
+
     except Exception as e:
         logger.error(f"Failed to start task {task_id}: {e}")
         active_tasks[task_id]["status"] = "failed"
@@ -222,11 +222,11 @@ class TaskProgressQueue:
     def __init__(self):
         self._queue = queue.Queue()
         self._messages = []
-    
+
     def put(self, message: str):
         self._queue.put(message)
         self._messages.append(message)
-    
+
     def get_all_messages(self) -> List[str]:
         # Drain the queue
         messages = []
@@ -254,42 +254,42 @@ def cleanup_temp_dir(temp_dir: Path):
     except Exception as e:
         logger.error(f"Error cleaning up temp dir {temp_dir}: {e}")
 
-async def run_pptx_translation_async(task_id: str, input_files: List[Path], 
+async def run_pptx_translation_async(task_id: str, input_files: List[Path],
                                    output_dir: Path, source_lang: str, target_lang: str):
     """Run PPTX translation asynchronously"""
     try:
         # Update task status
         active_tasks[task_id]["status"] = "running"
-        
+
         # Get API key
         api_keys = config_manager.get_api_keys()
         deepl_key = api_keys.get("deepl")
         if not deepl_key:
             raise ValueError("DeepL API key not configured")
-        
+
         # Progress callback
         def progress_callback(message: str):
             active_tasks[task_id]["messages"].append(message)
             logger.info(f"Task {task_id}: {message}")
-        
+
         # Initialize PPTX translation core
         translator = PPTXTranslationCore(deepl_key, progress_callback)
-        
+
         # Run processing in thread
         def process_files():
             try:
                 result_files = []
-                
+
                 for input_file in input_files:
                     if input_file.is_file() and input_file.suffix.lower() == '.pptx':
                         progress_callback(f"Starting translation of {input_file.name}")
                         output_file = output_dir / f"translated_{input_file.name}"
-                        
+
                         # Check input file size and existence
                         progress_callback(f"Input file size: {input_file.stat().st_size} bytes")
-                        
+
                         success = translator.translate_pptx(input_file, output_file, source_lang, target_lang)
-                        
+
                         if success:
                             # Check output file was created and has content
                             if output_file.exists():
@@ -302,57 +302,57 @@ async def run_pptx_translation_async(task_id: str, input_files: List[Path],
                         else:
                             progress_callback(f"Translation failed for {input_file.name}")
                             raise RuntimeError(f"Failed to translate {input_file.name}")
-                
+
                 # Update task with results
                 active_tasks[task_id]["status"] = "completed"
                 active_tasks[task_id]["result_files"] = result_files
-                
+
             except Exception as e:
                 logger.error(f"Task {task_id} failed: {e}")
                 active_tasks[task_id]["status"] = "failed"
                 active_tasks[task_id]["error"] = str(e)
-        
+
         # Run in thread
         thread = threading.Thread(target=process_files)
         thread.start()
-        
+
         # Wait for completion
         while thread.is_alive():
             await asyncio.sleep(0.5)
-        
+
         thread.join()
-        
+
     except Exception as e:
         logger.error(f"Failed to start task {task_id}: {e}")
         active_tasks[task_id]["status"] = "failed"
         active_tasks[task_id]["error"] = str(e)
 
-async def run_pptx_conversion_async(task_id: str, input_files: List[Path], 
+async def run_pptx_conversion_async(task_id: str, input_files: List[Path],
                                    output_dir: Path, output_format: str):
     """Run PPTX to PDF/PNG conversion asynchronously"""
     try:
         # Update task status
         active_tasks[task_id]["status"] = "running"
-        
+
         # Get API key
         api_keys = config_manager.get_api_keys()
         convertapi_key = api_keys.get("convertapi")
         if not convertapi_key:
             raise ValueError("ConvertAPI key not configured")
-        
+
         # Progress callback
         def progress_callback(message: str):
             active_tasks[task_id]["messages"].append(message)
             logger.info(f"Task {task_id}: {message}")
-        
+
         # Initialize PPTX converter core
         converter = PPTXConverterCore(convertapi_key, progress_callback)
-        
+
         # Run processing in thread
         def process_files():
             try:
                 result_files = []
-                
+
                 for input_file in input_files:
                     if input_file.is_file() and input_file.suffix.lower() == '.pptx':
                         if output_format.lower() == 'pdf':
@@ -368,83 +368,83 @@ async def run_pptx_conversion_async(task_id: str, input_files: List[Path],
                             result_files.extend(webp_files)
                         else:
                             raise ValueError(f"Unsupported output format: {output_format}")
-                        
+
                         if not result_files:
                             raise RuntimeError(f"Failed to convert {input_file.name}")
-                
+
                 # Update task with results
                 active_tasks[task_id]["status"] = "completed"
                 active_tasks[task_id]["result_files"] = result_files
-                
+
             except Exception as e:
                 logger.error(f"Task {task_id} failed: {e}")
                 active_tasks[task_id]["status"] = "failed"
                 active_tasks[task_id]["error"] = str(e)
-        
+
         # Run in thread
         thread = threading.Thread(target=process_files)
         thread.start()
-        
+
         # Wait for completion
         while thread.is_alive():
             await asyncio.sleep(0.5)
-        
+
         thread.join()
-        
+
     except Exception as e:
         logger.error(f"Failed to start task {task_id}: {e}")
         active_tasks[task_id]["status"] = "failed"
         active_tasks[task_id]["error"] = str(e)
 
-async def run_video_merger_async(task_id: str, input_files: List[Path], 
+async def run_video_merger_async(task_id: str, input_files: List[Path],
                                 output_dir: Path, duration_per_slide: float = 3.0,
                                 audio_file: Optional[Path] = None):
     """Run video merger asynchronously"""
     try:
         # Update task status
         active_tasks[task_id]["status"] = "running"
-        
+
         # Progress callback
         def progress_callback(message: str):
             active_tasks[task_id]["messages"].append(message)
             logger.info(f"Task {task_id}: {message}")
-        
+
         # Initialize video merger core
         merger = VideoMergerCore(progress_callback)
-        
+
         # Run processing in thread
         def process_files():
             try:
                 result_files = []
-                
+
                 # Check if we have image files or video files
                 image_files = [f for f in input_files if f.suffix.lower() in ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.gif']]
                 video_files = [f for f in input_files if merger.validate_video_file(f)]
-                
+
                 if image_files:
                     # Create video from images
                     output_file = output_dir / "merged_video.mp4"
-                    
+
                     # Create temporary directory for images
                     temp_img_dir = output_dir / "temp_images"
                     temp_img_dir.mkdir(exist_ok=True)
-                    
+
                     # Copy images to temp directory (to ensure proper ordering)
                     for i, img_file in enumerate(image_files):
                         temp_img_path = temp_img_dir / f"image_{i:04d}{img_file.suffix}"
                         temp_img_path.write_bytes(img_file.read_bytes())
-                    
+
                     success = merger.create_video_from_files(
                         temp_img_dir, output_file, duration_per_slide, audio_file
                     )
-                    
+
                     # Clean up temp directory
                     import shutil
                     shutil.rmtree(temp_img_dir)
-                    
+
                     if success:
                         result_files.append(str(output_file))
-                
+
                 elif video_files:
                     # Merge videos
                     output_file = output_dir / "merged_video.mp4"
@@ -453,29 +453,29 @@ async def run_video_merger_async(task_id: str, input_files: List[Path],
                         result_files.append(str(output_file))
                 else:
                     raise ValueError("No valid image or video files found")
-                
+
                 if not result_files:
                     raise RuntimeError("Failed to create video")
-                
+
                 # Update task with results
                 active_tasks[task_id]["status"] = "completed"
                 active_tasks[task_id]["result_files"] = result_files
-                
+
             except Exception as e:
                 logger.error(f"Task {task_id} failed: {e}")
                 active_tasks[task_id]["status"] = "failed"
                 active_tasks[task_id]["error"] = str(e)
-        
+
         # Run in thread
         thread = threading.Thread(target=process_files)
         thread.start()
-        
+
         # Wait for completion
         while thread.is_alive():
             await asyncio.sleep(0.5)
-        
+
         thread.join()
-        
+
     except Exception as e:
         logger.error(f"Failed to start task {task_id}: {e}")
         active_tasks[task_id]["status"] = "failed"
@@ -489,7 +489,7 @@ async def root():
         "version": "1.0.0",
         "endpoints": {
             "translate_pptx": "/translate/pptx",
-            "translate_text": "/translate/text", 
+            "translate_text": "/translate/text",
             "transcribe_audio": "/transcribe/audio",
             "convert_pptx": "/convert/pptx",
             "text_to_speech": "/tts",
@@ -554,19 +554,19 @@ async def translate_pptx(
     output_dir = temp_dir / "output"
     input_dir.mkdir(parents=True)
     output_dir.mkdir(parents=True)
-    
+
     # Save uploaded files
     input_files = []
     for file in files:
         if not file.filename.endswith('.pptx'):
             raise HTTPException(status_code=400, detail="Only PPTX files are supported")
-        
+
         file_path = input_dir / file.filename
         with open(file_path, "wb") as f:
             content = await file.read()
             f.write(content)
         input_files.append(file_path)
-    
+
     # Initialize task
     active_tasks[task_id] = {
         "status": "pending",
@@ -575,7 +575,7 @@ async def translate_pptx(
         "output_dir": output_dir,
         "messages": []
     }
-    
+
     # Start background task
     background_tasks.add_task(
         run_pptx_translation_async,
@@ -585,7 +585,7 @@ async def translate_pptx(
         source_lang,
         target_lang
     )
-    
+
     return TaskStatus(task_id=task_id, status="pending")
 
 @app.post("/translate/text", response_model=TaskStatus)
@@ -603,19 +603,19 @@ async def translate_text(
     output_dir = temp_dir / "output"
     input_dir.mkdir(parents=True)
     output_dir.mkdir(parents=True)
-    
+
     # Save uploaded files
     input_files = []
     for file in files:
         if not file.filename.endswith('.txt'):
             raise HTTPException(status_code=400, detail="Only TXT files are supported")
-        
+
         file_path = input_dir / file.filename
         with open(file_path, "wb") as f:
             content = await file.read()
             f.write(content)
         input_files.append(file_path)
-    
+
     # Initialize task
     active_tasks[task_id] = {
         "status": "pending",
@@ -624,7 +624,7 @@ async def translate_text(
         "output_dir": output_dir,
         "messages": []
     }
-    
+
     # Start background task
     background_tasks.add_task(
         run_tool_async,
@@ -635,7 +635,7 @@ async def translate_text(
         source_lang=source_lang,
         target_lang=target_lang
     )
-    
+
     return TaskStatus(task_id=task_id, status="pending")
 
 @app.post("/transcribe/audio", response_model=TaskStatus)
@@ -651,25 +651,25 @@ async def transcribe_audio(
     output_dir = temp_dir / "output"
     input_dir.mkdir(parents=True)
     output_dir.mkdir(parents=True)
-    
+
     # Save uploaded files
     input_files = []
     supported_formats = {'.wav', '.mp3', '.m4a', '.webm', '.mp4', '.mpga', '.mpeg'}
-    
+
     for file in files:
         file_ext = Path(file.filename).suffix.lower()
         if file_ext not in supported_formats:
             raise HTTPException(
-                status_code=400, 
+                status_code=400,
                 detail=f"Unsupported audio format: {file_ext}. Supported: {supported_formats}"
             )
-        
+
         file_path = input_dir / file.filename
         with open(file_path, "wb") as f:
             content = await file.read()
             f.write(content)
         input_files.append(file_path)
-    
+
     # Initialize task
     active_tasks[task_id] = {
         "status": "pending",
@@ -678,7 +678,7 @@ async def transcribe_audio(
         "output_dir": output_dir,
         "messages": []
     }
-    
+
     # Start background task
     background_tasks.add_task(
         run_tool_async,
@@ -687,7 +687,7 @@ async def transcribe_audio(
         input_files,
         output_dir
     )
-    
+
     return TaskStatus(task_id=task_id, status="pending")
 
 @app.post("/convert/pptx", response_model=TaskStatus)
@@ -700,26 +700,26 @@ async def convert_pptx(
     """Convert PPTX files to PDF, PNG, or WEBP"""
     if output_format not in ["pdf", "png", "webp"]:
         raise HTTPException(status_code=400, detail="Output format must be 'pdf', 'png', or 'webp'")
-    
+
     task_id = create_task_id()
     temp_dir = get_temp_dir()
     input_dir = temp_dir / "input"
     output_dir = temp_dir / "output"
     input_dir.mkdir(parents=True)
     output_dir.mkdir(parents=True)
-    
+
     # Save uploaded files
     input_files = []
     for file in files:
         if not file.filename.endswith('.pptx'):
             raise HTTPException(status_code=400, detail="Only PPTX files are supported")
-        
+
         file_path = input_dir / file.filename
         with open(file_path, "wb") as f:
             content = await file.read()
             f.write(content)
         input_files.append(file_path)
-    
+
     # Initialize task
     active_tasks[task_id] = {
         "status": "pending",
@@ -728,7 +728,7 @@ async def convert_pptx(
         "output_dir": output_dir,
         "messages": []
     }
-    
+
     # Start background task
     background_tasks.add_task(
         run_pptx_conversion_async,
@@ -737,7 +737,7 @@ async def convert_pptx(
         output_dir,
         output_format
     )
-    
+
     return TaskStatus(task_id=task_id, status="pending")
 
 @app.post("/tts", response_model=TaskStatus)
@@ -753,19 +753,19 @@ async def text_to_speech(
     output_dir = temp_dir / "output"
     input_dir.mkdir(parents=True)
     output_dir.mkdir(parents=True)
-    
+
     # Save uploaded files
     input_files = []
     for file in files:
         if not file.filename.endswith('.txt'):
             raise HTTPException(status_code=400, detail="Only TXT files are supported")
-        
+
         file_path = input_dir / file.filename
         with open(file_path, "wb") as f:
             content = await file.read()
             f.write(content)
         input_files.append(file_path)
-    
+
     # Initialize task
     active_tasks[task_id] = {
         "status": "pending",
@@ -774,7 +774,7 @@ async def text_to_speech(
         "output_dir": output_dir,
         "messages": []
     }
-    
+
     # Start background task
     background_tasks.add_task(
         run_tool_async,
@@ -783,7 +783,7 @@ async def text_to_speech(
         input_files,
         output_dir
     )
-    
+
     return TaskStatus(task_id=task_id, status="pending")
 
 @app.post("/video/merge", response_model=TaskStatus)
@@ -801,42 +801,42 @@ async def merge_video(
     output_dir = temp_dir / "output"
     input_dir.mkdir(parents=True)
     output_dir.mkdir(parents=True)
-    
+
     # Save uploaded files
     input_files = []
     for file in files:
         # Accept both image and video files
-        allowed_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.gif', 
+        allowed_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.gif',
                             '.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.wmv'}
         file_ext = Path(file.filename).suffix.lower()
-        
+
         if file_ext not in allowed_extensions:
-            raise HTTPException(status_code=400, 
+            raise HTTPException(status_code=400,
                               detail=f"Unsupported file format: {file_ext}. "
                                    f"Supported: {', '.join(allowed_extensions)}")
-        
+
         file_path = input_dir / file.filename
         with open(file_path, "wb") as f:
             content = await file.read()
             f.write(content)
         input_files.append(file_path)
-    
+
     # Save audio file if provided
     audio_path = None
     if audio_file and audio_file.filename:
         audio_extensions = {'.mp3', '.wav', '.aac', '.m4a', '.flac', '.ogg'}
         audio_ext = Path(audio_file.filename).suffix.lower()
-        
+
         if audio_ext not in audio_extensions:
-            raise HTTPException(status_code=400, 
+            raise HTTPException(status_code=400,
                               detail=f"Unsupported audio format: {audio_ext}. "
                                    f"Supported: {', '.join(audio_extensions)}")
-        
+
         audio_path = input_dir / audio_file.filename
         with open(audio_path, "wb") as f:
             content = await audio_file.read()
             f.write(content)
-    
+
     # Initialize task
     active_tasks[task_id] = {
         "status": "pending",
@@ -845,7 +845,7 @@ async def merge_video(
         "output_dir": output_dir,
         "messages": []
     }
-    
+
     # Start background task
     background_tasks.add_task(
         run_video_merger_async,
@@ -855,7 +855,7 @@ async def merge_video(
         duration_per_slide,
         audio_path
     )
-    
+
     return TaskStatus(task_id=task_id, status="pending")
 
 @app.get("/tasks/{task_id}", response_model=TaskStatus)
@@ -863,7 +863,7 @@ async def get_task_status(task_id: str, token: str = Depends(verify_token)):
     """Get the status of a specific task"""
     if task_id not in active_tasks:
         raise HTTPException(status_code=404, detail="Task not found")
-    
+
     task = active_tasks[task_id]
     return TaskStatus(
         task_id=task_id,
@@ -878,18 +878,18 @@ async def download_results(task_id: str, token: str = Depends(verify_token)):
     """Download the results of a completed task"""
     if task_id not in active_tasks:
         raise HTTPException(status_code=404, detail="Task not found")
-    
+
     task = active_tasks[task_id]
     if task["status"] != "completed":
         raise HTTPException(status_code=400, detail="Task not completed")
-    
+
     result_files = task.get("result_files", [])
     if not result_files:
         raise HTTPException(status_code=404, detail="No result files found")
-    
+
     logger.info(f"Download request for task {task_id}: {len(result_files)} files found")
     logger.info(f"Result files: {result_files}")
-    
+
     # If single file, return it directly
     if len(result_files) == 1:
         file_path = Path(result_files[0])
@@ -897,7 +897,7 @@ async def download_results(task_id: str, token: str = Depends(verify_token)):
         logger.info(f"File exists: {file_path.exists()}")
         logger.info(f"File size: {file_path.stat().st_size if file_path.exists() else 'N/A'} bytes")
         logger.info(f"File absolute path: {file_path.absolute()}")
-        
+
         if file_path.exists() and file_path.is_file():
             # Determine media type based on file extension
             media_type = 'application/octet-stream'
@@ -911,7 +911,7 @@ async def download_results(task_id: str, token: str = Depends(verify_token)):
                 media_type = 'audio/mpeg'
             elif file_path.suffix.lower() in ['.png', '.jpg', '.jpeg']:
                 media_type = f'image/{file_path.suffix.lower().lstrip(".")}'
-            
+
             logger.info(f"Returning single file: {file_path.name} with media type: {media_type}")
             return FileResponse(
                 path=str(file_path),
@@ -922,12 +922,12 @@ async def download_results(task_id: str, token: str = Depends(verify_token)):
             logger.error(f"Single file not found or not a file: {file_path}")
             logger.error(f"Path exists: {file_path.exists()}, Is file: {file_path.is_file() if file_path.exists() else 'N/A'}")
             # Fall through to ZIP creation to see if that works
-    
+
     # Multiple files: create zip archive
     logger.info(f"Creating ZIP archive for {len(result_files)} files")
     import io
     import zipfile
-    
+
     zip_buffer = io.BytesIO()
     files_added = 0
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
@@ -938,10 +938,10 @@ async def download_results(task_id: str, token: str = Depends(verify_token)):
                 zip_file.write(file_path, file_path.name)
                 files_added += 1
                 logger.info(f"Added to ZIP: {file_path.name}")
-    
+
     logger.info(f"ZIP created with {files_added} files, buffer size: {zip_buffer.tell()} bytes")
     zip_buffer.seek(0)
-    
+
     return StreamingResponse(
         io.BytesIO(zip_buffer.read()),
         media_type="application/zip",
@@ -953,22 +953,22 @@ async def download_single_file(task_id: str, file_index: int, token: str = Depen
     """Download a specific file from a completed task by index"""
     if task_id not in active_tasks:
         raise HTTPException(status_code=404, detail="Task not found")
-    
+
     task = active_tasks[task_id]
     if task["status"] != "completed":
         raise HTTPException(status_code=400, detail="Task not completed")
-    
+
     result_files = task.get("result_files", [])
     if not result_files:
         raise HTTPException(status_code=404, detail="No result files found")
-    
+
     if file_index < 0 or file_index >= len(result_files):
         raise HTTPException(status_code=400, detail=f"Invalid file index. Must be 0-{len(result_files)-1}")
-    
+
     file_path = Path(result_files[file_index])
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File not found")
-    
+
     # Determine media type based on file extension
     media_type = 'application/octet-stream'
     if file_path.suffix.lower() == '.pdf':
@@ -981,7 +981,7 @@ async def download_single_file(task_id: str, file_index: int, token: str = Depen
         media_type = 'audio/mpeg'
     elif file_path.suffix.lower() in ['.png', '.jpg', '.jpeg']:
         media_type = f'image/{file_path.suffix.lower().lstrip(".")}'
-    
+
     return FileResponse(
         path=str(file_path),
         filename=file_path.name,
@@ -993,15 +993,15 @@ async def cleanup_task(task_id: str, token: str = Depends(verify_token)):
     """Clean up a task and its temporary files"""
     if task_id not in active_tasks:
         raise HTTPException(status_code=404, detail="Task not found")
-    
+
     task = active_tasks[task_id]
     temp_dir = task.get("temp_dir")
-    
+
     if temp_dir:
         cleanup_temp_dir(Path(temp_dir))
-    
+
     del active_tasks[task_id]
-    
+
     return {"message": f"Task {task_id} cleaned up successfully"}
 
 @app.get("/tasks")
@@ -1053,6 +1053,22 @@ class CourseS3Request(BaseModel):
     target_langs: List[str] = Field(..., description="List of target language codes")
     output_prefix: Optional[str] = Field(None, description="Optional root prefix for translated course (defaults to original 'contribute/')")
 
+class TTSS3Request(BaseModel):
+    """Request model for generating speech from TXT files stored in S3."""
+    input_keys: List[str] = Field(..., description="S3 object keys of the input text files (.txt)")
+    output_prefix: Optional[str] = Field(None, description="Destination S3 prefix for generated audio files")
+
+# -------------------------------------------------------------------
+# New request model for direct text-to-speech with S3 upload (no TXT).
+# -------------------------------------------------------------------
+
+class TTSTextRequest(BaseModel):
+    """Request body for generating speech from a raw text string and uploading the result to S3."""
+
+    text: str = Field(..., description="Text content to convert to speech")
+    output_key: str = Field(..., description="Destination S3 key (path + filename) for the generated MP3, e.g. 'audio/course/00.mp3'")
+    voice_id: Optional[str] = Field(None, description="ElevenLabs voice_id to use (optional)")
+
 # --------------------------------------
 # Background runners for S3 workflows
 # --------------------------------------
@@ -1084,15 +1100,15 @@ async def run_pptx_translation_s3_async(task_id: str, input_keys: List[str], out
         for i, input_file in enumerate(input_files):
             if input_file.suffix.lower() != ".pptx":
                 raise ValueError(f"Unsupported file type {input_file}")
-            
+
             progress_callback(f"Starting translation of {input_file.name}")
             output_file = output_dir / f"translated_{input_file.name}"
-            
+
             # Check input file size and existence
             progress_callback(f"Input file size: {input_file.stat().st_size} bytes")
-            
+
             success = translator.translate_pptx(input_file, output_file, source_lang, target_lang)
-            
+
             if success:
                 # Check output file was created and has content
                 if output_file.exists():
@@ -1378,6 +1394,122 @@ async def run_text_translation_s3_async(task_id: str, input_keys: List[str], out
         active_tasks[task_id]["error"] = str(e)
 
 # --------------------------------------
+# Background runner for Text-to-Speech from S3
+# --------------------------------------
+
+async def run_tts_s3_async(task_id: str, input_keys: List[str], output_prefix: Optional[str],
+                           output_dir: Path):
+    """Download text files from S3, generate audio using ElevenLabs, then upload MP3s back to S3."""
+    try:
+        # Mark task as running
+        active_tasks[task_id]["status"] = "running"
+
+        # Retrieve ElevenLabs API key
+        api_keys = config_manager.get_api_keys()
+        elevenlabs_key: Optional[str] = api_keys.get("elevenlabs")
+        if not elevenlabs_key:
+            raise ValueError("ElevenLabs API key not configured")
+
+        # Prepare S3 client and local workspace
+        s3 = S3ClientWrapper()
+
+        def progress(msg: str):
+            active_tasks[task_id]["messages"].append(msg)
+            logger.info(f"Task {task_id}: {msg}")
+
+        temp_input_dir = output_dir.parent / "input"
+        input_files = s3.download_files(input_keys, temp_input_dir)
+
+        # Initialise TTS core
+        tts_core = TextToSpeechCore(elevenlabs_key, progress)
+
+        result_local_paths: List[Path] = []
+
+        for input_path in input_files:
+            if input_path.suffix.lower() != ".txt":
+                raise ValueError(f"Unsupported file type {input_path}")
+
+            output_path = output_dir / f"audio_{input_path.stem}.mp3"
+            progress(f"Generating audio for {input_path.name}")
+
+            success = tts_core.text_to_speech_file(input_path, output_path)
+            if not success:
+                raise RuntimeError(f"Failed to generate audio for {input_path.name}")
+
+            result_local_paths.append(output_path)
+
+        # Upload back to S3 (preserve structure or apply output_prefix)
+        result_keys = s3.upload_files_with_mapping(result_local_paths, input_keys, output_prefix)
+
+        active_tasks[task_id]["status"] = "completed"
+        active_tasks[task_id]["result_files"] = result_keys
+
+    except Exception as exc:
+        logger.error(f"TTS task {task_id} failed: {exc}")
+        active_tasks[task_id]["status"] = "failed"
+        active_tasks[task_id]["error"] = str(exc)
+
+# --------------------------------------
+# Background runner for direct Text -> Speech (upload to S3)
+# --------------------------------------
+
+async def run_tts_text_s3_async(task_id: str, text: str, output_key: str, voice_id: Optional[str], temp_dir: Path):
+    """Generate audio from raw text and upload to S3 at *output_key*."""
+
+    try:
+        active_tasks[task_id]["status"] = "running"
+
+        api_keys = config_manager.get_api_keys()
+        elevenlabs_key = api_keys.get("elevenlabs")
+        if not elevenlabs_key:
+            raise ValueError("ElevenLabs API key not configured")
+
+        # Prepare working dirs
+        input_dir = temp_dir / "input"
+        output_dir = temp_dir / "output"
+        input_dir.mkdir(parents=True)
+        output_dir.mkdir(parents=True)
+
+        # Write text to a temporary file (the core expects a file path)
+        input_path = input_dir / "input.txt"
+        with open(input_path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+
+        output_path = output_dir / "audio.mp3"
+
+        def progress(msg: str):
+            active_tasks[task_id]["messages"].append(msg)
+            logger.info(f"Task {task_id}: {msg}")
+
+        tts = TextToSpeechCore(elevenlabs_key, progress)
+
+        # If voice_id explicitly provided we bypass filename detection
+        if voice_id:
+            success = tts.generate_audio(input_path, output_path, voice_id)
+        else:
+            # Use helper that auto-detects voice from filename (will pick default)
+            success = tts.text_to_speech_file(input_path, output_path)
+
+        if not success:
+            raise RuntimeError("Failed to generate audio from text")
+
+        # Upload to S3 at exact output_key
+        s3 = S3ClientWrapper()
+        s3._client.upload_file(str(output_path), s3.bucket, output_key)
+
+        active_tasks[task_id]["status"] = "completed"
+        active_tasks[task_id]["result_files"] = [output_key]
+
+    except Exception as exc:
+        logger.error(f"TTS-text task {task_id} failed: {exc}")
+        active_tasks[task_id]["status"] = "failed"
+        active_tasks[task_id]["error"] = str(exc)
+
+    finally:
+        # Clean up temp directory
+        cleanup_temp_dir(temp_dir)
+
+# --------------------------------------
 # S3 Endpoints
 # --------------------------------------
 @app.post("/translate/pptx_s3", response_model=TaskStatus)
@@ -1502,6 +1634,73 @@ async def translate_course_s3(
         request.source_lang,
         request.target_langs,
         request.output_prefix,
+        temp_dir,
+    )
+
+    return TaskStatus(task_id=task_id, status="pending")
+
+# --------------------------------------
+# Text-to-Speech S3 Endpoint
+# --------------------------------------
+
+@app.post("/tts_s3", response_model=TaskStatus)
+async def text_to_speech_s3(
+    request: TTSS3Request,
+    background_tasks: BackgroundTasks,
+    token: str = Depends(verify_token)
+):
+    """Generate speech from text files stored in S3 and upload MP3 results."""
+
+    task_id = create_task_id()
+    temp_dir = get_temp_dir()
+    output_dir = temp_dir / "output"
+    output_dir.mkdir(parents=True)
+
+    active_tasks[task_id] = {
+        "status": "pending",
+        "temp_dir": temp_dir,
+        "input_files": request.input_keys,
+        "output_dir": output_dir,
+        "messages": []
+    }
+
+    background_tasks.add_task(
+        run_tts_s3_async,
+        task_id,
+        request.input_keys,
+        request.output_prefix,
+        output_dir,
+    )
+
+    return TaskStatus(task_id=task_id, status="pending")
+
+# --------------------------------------
+# Direct Text-to-Speech & S3 upload Endpoint
+# --------------------------------------
+
+@app.post("/tts_text_s3", response_model=TaskStatus)
+async def text_to_speech_text_s3(
+    request: TTSTextRequest,
+    background_tasks: BackgroundTasks,
+    token: str = Depends(verify_token)
+):
+    """Generate MP3 from a raw text string and upload it to S3 at *output_key*."""
+
+    task_id = create_task_id()
+    temp_dir = get_temp_dir()
+
+    active_tasks[task_id] = {
+        "status": "pending",
+        "temp_dir": temp_dir,
+        "messages": []
+    }
+
+    background_tasks.add_task(
+        run_tts_text_s3_async,
+        task_id,
+        request.text,
+        request.output_key,
+        request.voice_id,
         temp_dir,
     )
 
