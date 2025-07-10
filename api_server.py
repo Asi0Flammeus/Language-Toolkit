@@ -595,7 +595,7 @@ async def translate_pptx(
         target_lang
     )
 
-    return TaskStatus(task_id=task_id, status="pending")
+    return TaskStatus(task_id=task_id, status="pending", source_lang=source_lang)
 
 @app.post("/translate/text", response_model=TaskStatus)
 async def translate_text(
