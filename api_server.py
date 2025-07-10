@@ -202,6 +202,8 @@ class TaskStatus(BaseModel):
     progress: Optional[str] = None
     error: Optional[str] = None
     result_files: Optional[List[str]] = None
+    manifest: Optional[Dict] = None
+    source_lang: Optional[str] = None
 
 class TranslationRequest(BaseModel):
     """PPTX translation request model"""
@@ -573,7 +575,9 @@ async def translate_pptx(
         "temp_dir": temp_dir,
         "input_files": input_files,
         "output_dir": output_dir,
-        "messages": []
+        "messages": [],
+        "manifest": None,
+        "source_lang": source_lang
     }
     
     # Start background task
@@ -586,7 +590,7 @@ async def translate_pptx(
         target_lang
     )
     
-    return TaskStatus(task_id=task_id, status="pending")
+    return TaskStatus(task_id=task_id, status="pending", source_lang=source_lang)
 
 @app.post("/translate/text", response_model=TaskStatus)
 async def translate_text(
@@ -622,7 +626,9 @@ async def translate_text(
         "temp_dir": temp_dir,
         "input_files": input_files,
         "output_dir": output_dir,
-        "messages": []
+        "messages": [],
+        "manifest": None,
+        "source_lang": source_lang
     }
     
     # Start background task
@@ -636,7 +642,7 @@ async def translate_text(
         target_lang=target_lang
     )
     
-    return TaskStatus(task_id=task_id, status="pending")
+    return TaskStatus(task_id=task_id, status="pending", source_lang=source_lang)
 
 @app.post("/transcribe/audio", response_model=TaskStatus)
 async def transcribe_audio(
@@ -676,7 +682,9 @@ async def transcribe_audio(
         "temp_dir": temp_dir,
         "input_files": input_files,
         "output_dir": output_dir,
-        "messages": []
+        "messages": [],
+        "manifest": None,
+        "source_lang": None # Audio transcription doesn't have a source language
     }
     
     # Start background task
@@ -688,7 +696,7 @@ async def transcribe_audio(
         output_dir
     )
     
-    return TaskStatus(task_id=task_id, status="pending")
+    return TaskStatus(task_id=task_id, status="pending", source_lang=None)
 
 @app.post("/convert/pptx", response_model=TaskStatus)
 async def convert_pptx(
@@ -726,7 +734,9 @@ async def convert_pptx(
         "temp_dir": temp_dir,
         "input_files": input_files,
         "output_dir": output_dir,
-        "messages": []
+        "messages": [],
+        "manifest": None,
+        "source_lang": None # Conversion doesn't have a source language
     }
     
     # Start background task
@@ -738,7 +748,7 @@ async def convert_pptx(
         output_format
     )
     
-    return TaskStatus(task_id=task_id, status="pending")
+    return TaskStatus(task_id=task_id, status="pending", source_lang=None)
 
 @app.post("/tts", response_model=TaskStatus)
 async def text_to_speech(
@@ -772,7 +782,9 @@ async def text_to_speech(
         "temp_dir": temp_dir,
         "input_files": input_files,
         "output_dir": output_dir,
-        "messages": []
+        "messages": [],
+        "manifest": None,
+        "source_lang": None # TTS doesn't have a source language
     }
     
     # Start background task
@@ -784,7 +796,7 @@ async def text_to_speech(
         output_dir
     )
     
-    return TaskStatus(task_id=task_id, status="pending")
+    return TaskStatus(task_id=task_id, status="pending", source_lang=None)
 
 @app.post("/video/merge", response_model=TaskStatus)
 async def merge_video(
@@ -843,7 +855,9 @@ async def merge_video(
         "temp_dir": temp_dir,
         "input_files": input_files,
         "output_dir": output_dir,
-        "messages": []
+        "messages": [],
+        "manifest": None,
+        "source_lang": None # Video merger doesn't have a source language
     }
     
     # Start background task
@@ -856,7 +870,7 @@ async def merge_video(
         audio_path
     )
     
-    return TaskStatus(task_id=task_id, status="pending")
+    return TaskStatus(task_id=task_id, status="pending", source_lang=None)
 
 @app.get("/tasks/{task_id}", response_model=TaskStatus)
 async def get_task_status(task_id: str, token: str = Depends(verify_token)):
@@ -870,7 +884,9 @@ async def get_task_status(task_id: str, token: str = Depends(verify_token)):
         status=task["status"],
         progress=task.get("progress"),
         error=task.get("error"),
-        result_files=task.get("result_files")
+        result_files=task.get("result_files"),
+        manifest=task.get("manifest"),
+        source_lang=task.get("source_lang")
     )
 
 @app.get("/download/{task_id}")
@@ -1012,7 +1028,11 @@ async def list_tasks(token: str = Depends(verify_token)):
             {
                 "task_id": task_id,
                 "status": task["status"],
-                "progress": task.get("progress")
+                "progress": task.get("progress"),
+                "error": task.get("error"),
+                "result_files": task.get("result_files"),
+                "manifest": task.get("manifest"),
+                "source_lang": task.get("source_lang")
             }
             for task_id, task in active_tasks.items()
         ]
@@ -1257,6 +1277,9 @@ async def run_course_translation_s3_async(task_id: str, course_id: str, source_l
 
         from core.pptx_utils import split_pptx_to_single_slides
 
+        def deepl_lang(code: str) -> str:
+            return 'en-us' if code.lower() == 'en' else code
+
         for (part_id, chapter_id), pptx_path in chapter_pptx.items():
             txt_entries = sorted(chapter_txts.get((part_id, chapter_id), []), key=lambda x: int(x[0]) if x[0].isdigit() else x[0])
             if not txt_entries:
@@ -1268,7 +1291,7 @@ async def run_course_translation_s3_async(task_id: str, course_id: str, source_l
             for target_lang in target_langs:
                 # Translate full pptx once per target language per chapter
                 translated_full = output_dir / f"translated_{target_lang}_{part_id}_{chapter_id}.pptx"
-                success = pptx_translator.translate_pptx(pptx_path, translated_full, source_lang, target_lang)
+                success = pptx_translator.translate_pptx(pptx_path, translated_full, deepl_lang(source_lang), deepl_lang(target_lang))
                 if not success:
                     raise RuntimeError(f"Failed to translate PPTX {pptx_path} to {target_lang}")
 
@@ -1300,7 +1323,7 @@ async def run_course_translation_s3_async(task_id: str, course_id: str, source_l
                     local_out_path = output_dir / target_lang / part_id / chapter_id / slide_id / 'text' / f"{stem}.txt"
                     local_out_path.parent.mkdir(parents=True, exist_ok=True)
 
-                    success = text_translator.translate_text_file(txt_local, local_out_path, source_lang, target_lang)
+                    success = text_translator.translate_text_file(txt_local, local_out_path, deepl_lang(source_lang), deepl_lang(target_lang))
                     if not success:
                         raise RuntimeError(f"Failed to translate TXT {txt_local}")
 
@@ -1318,6 +1341,7 @@ async def run_course_translation_s3_async(task_id: str, course_id: str, source_l
 
         active_tasks[task_id]["status"] = "completed"
         active_tasks[task_id]["result_files"] = [manifest_key]
+        active_tasks[task_id]["manifest"] = manifest
 
     except Exception as e:
         logger.error(f"Course task {task_id} failed: {e}")
@@ -1393,7 +1417,9 @@ async def translate_pptx_s3(request: PPTXS3Request, background_tasks: Background
         "temp_dir": temp_dir,
         "input_files": request.input_keys,  # store keys instead of paths
         "output_dir": output_dir,
-        "messages": []
+        "messages": [],
+        "manifest": None,
+        "source_lang": request.source_lang
     }
 
     background_tasks.add_task(
@@ -1406,7 +1432,7 @@ async def translate_pptx_s3(request: PPTXS3Request, background_tasks: Background
         request.target_lang
     )
 
-    return TaskStatus(task_id=task_id, status="pending")
+    return TaskStatus(task_id=task_id, status="pending", source_lang=request.source_lang)
 
 
 @app.post("/transcribe/audio_s3", response_model=TaskStatus)
@@ -1422,7 +1448,9 @@ async def transcribe_audio_s3(request: AudioS3Request, background_tasks: Backgro
         "temp_dir": temp_dir,
         "input_files": request.input_keys,
         "output_dir": output_dir,
-        "messages": []
+        "messages": [],
+        "manifest": None,
+        "source_lang": None
     }
 
     background_tasks.add_task(
@@ -1433,7 +1461,7 @@ async def transcribe_audio_s3(request: AudioS3Request, background_tasks: Backgro
         output_dir
     )
 
-    return TaskStatus(task_id=task_id, status="pending")
+    return TaskStatus(task_id=task_id, status="pending", source_lang=None)
 
 
 # --------------------------------------
@@ -1458,7 +1486,9 @@ async def translate_text_s3(
         "temp_dir": temp_dir,
         "input_files": request.input_keys,
         "output_dir": output_dir,
-        "messages": []
+        "messages": [],
+        "manifest": None,
+        "source_lang": request.source_lang
     }
 
     background_tasks.add_task(
@@ -1471,7 +1501,7 @@ async def translate_text_s3(
         request.target_lang,
     )
 
-    return TaskStatus(task_id=task_id, status="pending")
+    return TaskStatus(task_id=task_id, status="pending", source_lang=request.source_lang)
 
 # --------------------------------------
 # Course Translation Endpoint
@@ -1492,7 +1522,8 @@ async def translate_course_s3(
     active_tasks[task_id] = {
         "status": "pending",
         "temp_dir": temp_dir,
-        "messages": []
+        "messages": [],
+        "manifest": None
     }
 
     background_tasks.add_task(
