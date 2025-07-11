@@ -1072,6 +1072,7 @@ class CourseS3Request(BaseModel):
     source_lang: str = Field(..., description="Language currently present in S3")
     target_langs: List[str] = Field(..., description="List of target language codes")
     output_prefix: Optional[str] = Field(None, description="Optional root prefix for translated course (defaults to original 'contribute/')")
+    use_english: bool = Field(False, description="If true, use already-translated English version as source instead of original language")
 
 # --------------------------------------
 # Background runners for S3 workflows
@@ -1251,8 +1252,15 @@ async def run_course_translation_s3_async(task_id: str, course_id: str, source_l
         # -----------------------------------------------------------
 
         from collections import defaultdict
-        chapter_txts: Dict[Tuple[str, str], List[Tuple[str, str, Path]]] = defaultdict(list)  # (part,chap) -> [(stem, slide_id, local_path)]
-        chapter_pptx: Dict[Tuple[str, str], Path] = {}
+
+        # Data structures
+        chapter_txts_split: Dict[Tuple[str, str], Dict[str, Tuple[str, Path]]] = defaultdict(dict)
+        # (part,chap) -> {slide_id: (stem, path)}
+        chapter_txts_unsplit: Dict[Tuple[str, str], List[Tuple[str, str, Path]]] = defaultdict(list)
+        # (part,chap) -> list(stem, slide_id, path)  slide_id generated later
+
+        chapter_pptx_unsplit: Dict[Tuple[str, str], Path] = {}
+        chapter_pptx_split: Dict[Tuple[str, str], Dict[str, Path]] = defaultdict(dict)  # slide_id -> path
 
         for src_key, local_path in key_to_local.items():
             if Path(src_key).name.startswith('.'):
@@ -1264,12 +1272,24 @@ async def run_course_translation_s3_async(task_id: str, course_id: str, source_l
                 continue
             part_id, chapter_id, folder_type, filename = parts[0], parts[1], parts[2], parts[3]
 
-            if folder_type == 'text':
-                stem = Path(filename).stem
-                slide_id = slide_id_cache.setdefault((part_id, chapter_id, stem), uuid.uuid4().hex)
-                chapter_txts[(part_id, chapter_id)].append((stem, slide_id, local_path))
-            elif folder_type == 'pptx' and filename.lower().endswith('.pptx'):
-                chapter_pptx[(part_id, chapter_id)] = local_path
+            # Determine structure
+            if len(parts) == 5:
+                # Already split path
+                slide_id = parts[2]
+                folder_split = parts[3]
+                filename_split = parts[4]
+                if folder_split == 'text':
+                    stem = Path(filename_split).stem
+                    chapter_txts_split[(part_id, chapter_id)][slide_id] = (stem, local_path)
+                elif folder_split == 'pptx' and filename_split.lower().endswith('.pptx'):
+                    chapter_pptx_split[(part_id, chapter_id)][slide_id] = local_path
+            else:  # len(parts)==4  unsplit original structure
+                if folder_type == 'text':
+                    stem = Path(filename).stem
+                    slide_id = slide_id_cache.setdefault((part_id, chapter_id, stem), uuid.uuid4().hex)
+                    chapter_txts_unsplit[(part_id, chapter_id)].append((stem, slide_id, local_path))
+                elif folder_type == 'pptx' and filename.lower().endswith('.pptx'):
+                    chapter_pptx_unsplit[(part_id, chapter_id)] = local_path
 
         # -----------------------------------------------------------
         # Process per chapter & per target language
@@ -1277,11 +1297,12 @@ async def run_course_translation_s3_async(task_id: str, course_id: str, source_l
 
         from core.pptx_utils import split_pptx_to_single_slides
 
-        def deepl_lang(code: str) -> str:
+        def deepl_target(code: str) -> str:
+            """Map target language code for DeepL API (convert en -> en-us)."""
             return 'en-us' if code.lower() == 'en' else code
 
-        for (part_id, chapter_id), pptx_path in chapter_pptx.items():
-            txt_entries = sorted(chapter_txts.get((part_id, chapter_id), []), key=lambda x: int(x[0]) if x[0].isdigit() else x[0])
+        for (part_id, chapter_id), pptx_path in chapter_pptx_unsplit.items():
+            txt_entries = sorted(chapter_txts_unsplit.get((part_id, chapter_id), []), key=lambda x: int(x[0]) if x[0].isdigit() else x[0])
             if not txt_entries:
                 progress(f"No TXT files for chapter {part_id}/{chapter_id}, skipping PPTX")
                 continue
@@ -1291,7 +1312,7 @@ async def run_course_translation_s3_async(task_id: str, course_id: str, source_l
             for target_lang in target_langs:
                 # Translate full pptx once per target language per chapter
                 translated_full = output_dir / f"translated_{target_lang}_{part_id}_{chapter_id}.pptx"
-                success = pptx_translator.translate_pptx(pptx_path, translated_full, deepl_lang(source_lang), deepl_lang(target_lang))
+                success = pptx_translator.translate_pptx(pptx_path, translated_full, source_lang, deepl_target(target_lang))
                 if not success:
                     raise RuntimeError(f"Failed to translate PPTX {pptx_path} to {target_lang}")
 
@@ -1323,13 +1344,53 @@ async def run_course_translation_s3_async(task_id: str, course_id: str, source_l
                     local_out_path = output_dir / target_lang / part_id / chapter_id / slide_id / 'text' / f"{stem}.txt"
                     local_out_path.parent.mkdir(parents=True, exist_ok=True)
 
-                    success = text_translator.translate_text_file(txt_local, local_out_path, deepl_lang(source_lang), deepl_lang(target_lang))
+                    success = text_translator.translate_text_file(txt_local, local_out_path, source_lang, deepl_target(target_lang))
                     if not success:
                         raise RuntimeError(f"Failed to translate TXT {txt_local}")
 
                     s3._client.upload_file(str(local_out_path), s3.bucket, target_key)
 
                     insert_manifest([course_id, target_lang, part_id, chapter_id, slide_id, 'text'], f"{stem}.txt")
+
+        # -----------------------------------------------------------
+        # Process chapters ALREADY split (slide_id present)
+        # -----------------------------------------------------------
+
+        for (part_id, chapter_id), slide_map in chapter_pptx_split.items():
+            for slide_id, mini_pptx_local in slide_map.items():
+                # Retrieve corresponding txt info
+                txt_entry = chapter_txts_split.get((part_id, chapter_id), {}).get(slide_id)
+                stem = Path(mini_pptx_local).stem  # assume same stem as txt
+
+                for target_lang in target_langs:
+                    # Translate the mini PPTX directly
+                    local_pptx_out = output_dir / target_lang / part_id / chapter_id / slide_id / 'pptx' / f"{stem}.pptx"
+                    local_pptx_out.parent.mkdir(parents=True, exist_ok=True)
+
+                    success = pptx_translator.translate_pptx(mini_pptx_local, local_pptx_out, source_lang, deepl_target(target_lang))
+                    if not success:
+                        raise RuntimeError(f"Failed to translate mini-PPTX {mini_pptx_local} to {target_lang}")
+
+                    root_prefix = output_prefix.rstrip('/') + '/' if output_prefix else 'contribute/'
+                    target_pptx_key = f"{root_prefix}{course_id}/{target_lang}/{part_id}/{chapter_id}/{slide_id}/pptx/{stem}.pptx"
+                    s3._client.upload_file(str(local_pptx_out), s3.bucket, target_pptx_key)
+
+                    insert_manifest([course_id, target_lang, part_id, chapter_id, slide_id, 'pptx'], f"{stem}.pptx")
+
+                    # If we have txt
+                    if txt_entry:
+                        stem_txt, txt_local_path = txt_entry
+                        local_txt_out = output_dir / target_lang / part_id / chapter_id / slide_id / 'text' / f"{stem_txt}.txt"
+                        local_txt_out.parent.mkdir(parents=True, exist_ok=True)
+
+                        success_txt = text_translator.translate_text_file(txt_local_path, local_txt_out, source_lang, deepl_target(target_lang))
+                        if not success_txt:
+                            raise RuntimeError(f"Failed to translate TXT {txt_local_path}")
+
+                        target_txt_key = f"{root_prefix}{course_id}/{target_lang}/{part_id}/{chapter_id}/{slide_id}/text/{stem_txt}.txt"
+                        s3._client.upload_file(str(local_txt_out), s3.bucket, target_txt_key)
+
+                        insert_manifest([course_id, target_lang, part_id, chapter_id, slide_id, 'text'], f"{stem_txt}.txt")
 
         # Save manifest locally and upload
         manifest_path = output_dir / "manifest.json"
@@ -1519,24 +1580,28 @@ async def translate_course_s3(
     task_id = create_task_id()
     temp_dir = get_temp_dir()
 
+    # Determine effective source language (could be 'en' if use_english=True)
+    effective_source_lang = "en" if request.use_english else request.source_lang
+
     active_tasks[task_id] = {
         "status": "pending",
         "temp_dir": temp_dir,
         "messages": [],
-        "manifest": None
+        "manifest": None,
+        "source_lang": effective_source_lang,
     }
 
     background_tasks.add_task(
         run_course_translation_s3_async,
         task_id,
         request.course_id,
-        request.source_lang,
+        effective_source_lang,
         request.target_langs,
         request.output_prefix,
         temp_dir,
     )
 
-    return TaskStatus(task_id=task_id, status="pending")
+    return TaskStatus(task_id=task_id, status="pending", source_lang=effective_source_lang)
 
 if __name__ == "__main__":
     # Run the server
