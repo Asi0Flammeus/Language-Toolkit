@@ -53,7 +53,12 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],  # React dev server
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8280",
+        "http://127.0.0.1:8280",
+    ],  # Frontend dev servers
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
@@ -1702,6 +1707,230 @@ async def text_to_speech_text_s3(
         request.output_key,
         request.voice_id,
         temp_dir,
+    )
+
+    return TaskStatus(task_id=task_id, status="pending")
+
+# --------------------------------------
+# Course Video Generation S3 Request
+# --------------------------------------
+class CourseVideoS3Request(BaseModel):
+    """Request model for creating a full course video from S3 PPTX + MP3."""
+    course_id: str = Field(..., description="Unique identifier of the course")
+    language: str = Field(..., description="Language of the course (ISO-639-1)")
+    output_key: Optional[str] = Field(None, description="Destination S3 key for the resulting MP4. Defaults to 'contribute/<course_id>/<language>/video.mp4'")
+
+
+# --------------------------------------
+# Background runner for Course Video Generation from S3
+# --------------------------------------
+async def run_course_video_s3_async(task_id: str, course_id: str, language: str, output_key: Optional[str]):
+    """Generate a complete course video by converting PPTX→PNG and merging with existing MP3 files."""
+    temp_root = None
+    try:
+        active_tasks[task_id]["status"] = "running"
+
+        from pathlib import Path  # ensure Path available early
+
+        api_keys = config_manager.get_api_keys()
+        convertapi_key = api_keys.get("convertapi")
+        if not convertapi_key:
+            raise ValueError("ConvertAPI key not configured")
+
+        s3 = S3ClientWrapper()
+
+        source_prefix = f"contribute/{course_id}/{language}/"
+
+        def progress(msg: str):
+            active_tasks[task_id]["messages"].append(msg)
+            active_tasks[task_id]["progress"] = msg
+            logger.info(f"Task {task_id}: {msg}")
+
+        progress("Starting course video generation...")
+
+        # Gather PPTX and MP3 keys
+        progress("Scanning S3 for PPTX files...")
+        all_files = s3.list_files(source_prefix)
+        pptx_keys = [k for k in all_files if k.lower().endswith('.pptx') and not Path(k).name.startswith('.')]
+        progress(f"Found {len(pptx_keys)} PPTX files: {[Path(k).name for k in pptx_keys]}")
+
+        if not pptx_keys:
+            raise RuntimeError(f"No .pptx files found under {source_prefix}")
+
+        progress("Scanning S3 for MP3 files...")
+        mp3_keys = [k for k in all_files if k.lower().endswith('.mp3') and not Path(k).name.startswith('.')]
+        progress(f"Found {len(mp3_keys)} MP3 files: {[Path(k).name for k in mp3_keys]}")
+
+        if not mp3_keys:
+            progress("Warning: No MP3 audio tracks found – video will be silent")
+
+        # Create temp dirs
+        import tempfile
+        temp_root = Path(tempfile.mkdtemp(prefix="course_video_"))
+        input_dir = temp_root / "input"
+        output_dir = temp_root / "output"
+        slides_dir = temp_root / "slides"
+        audio_dir = temp_root / "audio"
+
+        for directory in [input_dir, output_dir, slides_dir, audio_dir]:
+            directory.mkdir(parents=True, exist_ok=True)
+
+        progress(f"Created temp directory: {temp_root}")
+
+        # Download PPTX files
+        progress("Downloading PPTX files from S3...")
+        local_pptx = s3.download_files(pptx_keys, input_dir)
+        progress(f"Downloaded {len(local_pptx)} PPTX files")
+
+        # Download MP3 files if they exist
+        local_mp3 = []
+        if mp3_keys:
+            progress("Downloading MP3 files from S3...")
+            local_mp3 = s3.download_files(mp3_keys, audio_dir)
+            progress(f"Downloaded {len(local_mp3)} MP3 files")
+
+        # Convert PPTX → PNG
+        progress("Converting PPTX files to PNG images...")
+        from core.pptx_converter import PPTXConverterCore
+        converter = PPTXConverterCore(convertapi_key, progress)
+        slide_counter = 0
+        generated_images: List[Path] = []
+
+        for i, pptx_path in enumerate(sorted(local_pptx), 1):
+            progress(f"Converting PPTX {i}/{len(local_pptx)}: {pptx_path.name}")
+
+            try:
+                images = converter.convert_pptx_to_png(pptx_path, slides_dir)
+                progress(f"Generated {len(images)} images from {pptx_path.name}")
+
+                # Renumber images to sequential filenames for proper ordering
+                for img_path_str in images:
+                    img_path = Path(img_path_str)
+                    if not img_path.exists():
+                        progress(f"Warning: Generated image does not exist: {img_path}")
+                        continue
+
+                    new_name = f"{slide_counter:03d}.png"
+                    new_path = slides_dir / new_name
+                    img_path.rename(new_path)
+                    generated_images.append(new_path)
+                    slide_counter += 1
+
+            except Exception as conversion_error:
+                progress(f"Error converting {pptx_path.name}: {conversion_error}")
+                # Continue with other files instead of failing completely
+                continue
+
+        if not generated_images:
+            raise RuntimeError("PNG conversion produced no slides")
+
+        progress(f"Successfully generated {len(generated_images)} slide images")
+
+        # Prepare concatenated audio if audio tracks exist
+        audio_track: Optional[Path] = None
+        if local_mp3 and len(local_mp3) > 0:
+            progress("Concatenating audio tracks...")
+            try:
+                concat_list = audio_dir / "concat.txt"
+                with open(concat_list, "w", encoding="utf-8") as f:
+                    for mp3 in sorted(local_mp3):
+                        f.write(f"file '{mp3.absolute()}'\n")
+
+                audio_track = output_dir / "combined_audio.mp3"
+                import subprocess
+                cmd = [
+                    "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                    "-i", str(concat_list), "-c", "copy", str(audio_track),
+                ]
+                result = subprocess.run(cmd, capture_output=True, text=True)
+
+                if result.returncode != 0:
+                    progress(f"Warning: Audio concatenation failed: {result.stderr}")
+                    audio_track = None
+                else:
+                    progress(f"Successfully created combined audio: {audio_track}")
+
+            except Exception as audio_error:
+                progress(f"Warning: Audio processing failed: {audio_error}")
+                audio_track = None
+
+        # Create video from images and audio
+        progress("Creating video from slides and audio...")
+        from core.video_merger import VideoMergerCore
+        merger = VideoMergerCore(progress)
+        output_file = output_dir / "course_video.mp4"
+
+        # Use a shorter duration per slide if we have many slides
+        duration_per_slide = 3.0 if len(generated_images) <= 10 else 2.0
+        progress(f"Using {duration_per_slide}s per slide for {len(generated_images)} slides")
+
+        success = merger.create_video_from_files(
+            slides_dir, output_file,
+            duration_per_slide=duration_per_slide,
+            audio_file=audio_track
+        )
+
+        if not success or not output_file.exists():
+            raise RuntimeError("Video creation failed")
+
+        progress(f"Successfully created video: {output_file} ({output_file.stat().st_size} bytes)")
+
+        # Determine destination key
+        if not output_key:
+            output_key = f"contribute/{course_id}/{language}/video.mp4"
+
+        # Upload to S3
+        progress(f"Uploading video to S3: {output_key}")
+        s3._client.upload_file(str(output_file), s3.bucket, output_key)
+        progress("Video upload completed successfully")
+
+        active_tasks[task_id]["status"] = "completed"
+        active_tasks[task_id]["result_files"] = [output_key]
+        active_tasks[task_id]["progress"] = "100%"
+
+    except Exception as e:
+        error_msg = f"Course video task {task_id} failed: {e}"
+        logger.error(error_msg, exc_info=True)
+        active_tasks[task_id]["status"] = "failed"
+        active_tasks[task_id]["error"] = str(e)
+        active_tasks[task_id]["progress"] = f"Failed: {e}"
+    finally:
+        # Cleanup temp directory
+        if temp_root and temp_root.exists():
+            import shutil
+            try:
+                progress("Cleaning up temporary files...")
+                shutil.rmtree(temp_root, ignore_errors=True)
+            except Exception as cleanup_error:
+                logger.warning(
+                    f"Failed to cleanup temp directory {temp_root}: {cleanup_error}")
+
+
+# --------------------------------------
+# API route for course video generation
+# --------------------------------------
+@app.post("/video/course_s3", response_model=TaskStatus)
+async def generate_course_video_s3(
+    request: CourseVideoS3Request,
+    background_tasks: BackgroundTasks,
+    token: str = Depends(verify_token)
+):
+    task_id = create_task_id()
+    active_tasks[task_id] = {
+        "status": "pending",
+        "messages": [],
+        "progress": None,
+        "error": None,
+        "result_files": [],
+    }
+
+    # Start background task
+    background_tasks.add_task(
+        run_course_video_s3_async,
+        task_id,
+        request.course_id,
+        request.language,
+        request.output_key,
     )
 
     return TaskStatus(task_id=task_id, status="pending")
