@@ -1751,7 +1751,19 @@ async def run_course_video_s3_async(task_id: str, course_id: str, language: str,
         # Gather PPTX and MP3 keys
         progress("Scanning S3 for PPTX files...")
         all_files = s3.list_files(source_prefix)
-        pptx_keys = [k for k in all_files if k.lower().endswith('.pptx') and not Path(k).name.startswith('.')]
+
+        # First collect every .pptx under the prefix (excluding hidden files)
+        pptx_keys = [
+            k for k in all_files if k.lower().endswith('.pptx') and not Path(k).name.startswith('.')
+        ]
+
+        # If any proof-read versions exist (filename ending with '-proofread.pptx'),
+        # restrict the list to those only – this ensures the final video uses the
+        # reviewer-approved slides and ignores the original drafts.
+        proofread_pptx = [k for k in pptx_keys if Path(k).stem.endswith('-proofread')]
+        if proofread_pptx:
+            pptx_keys = proofread_pptx
+
         progress(f"Found {len(pptx_keys)} PPTX files: {[Path(k).name for k in pptx_keys]}")
 
         if not pptx_keys:
