@@ -1838,49 +1838,34 @@ async def run_course_video_s3_async(task_id: str, course_id: str, language: str,
 
         progress(f"Successfully generated {len(generated_images)} slide images")
 
-        # Prepare concatenated audio if audio tracks exist
-        audio_track: Optional[Path] = None
-        if local_mp3 and len(local_mp3) > 0:
-            progress("Concatenating audio tracks...")
-            try:
-                concat_list = audio_dir / "concat.txt"
-                with open(concat_list, "w", encoding="utf-8") as f:
-                    for mp3 in sorted(local_mp3):
-                        f.write(f"file '{mp3.absolute()}'\n")
-
-                audio_track = output_dir / "combined_audio.mp3"
-                import subprocess
-                cmd = [
-                    "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-                    "-i", str(concat_list), "-c", "copy", str(audio_track),
-                ]
-                result = subprocess.run(cmd, capture_output=True, text=True)
-
-                if result.returncode != 0:
-                    progress(f"Warning: Audio concatenation failed: {result.stderr}")
-                    audio_track = None
-                else:
-                    progress(f"Successfully created combined audio: {audio_track}")
-
-            except Exception as audio_error:
-                progress(f"Warning: Audio processing failed: {audio_error}")
-                audio_track = None
-
-        # Create video from images and audio
+        # Create video from images and audio with per-slide durations
         progress("Creating video from slides and audio...")
         from core.video_merger import VideoMergerCore
         merger = VideoMergerCore(progress)
         output_file = output_dir / "course_video.mp4"
 
-        # Use a shorter duration per slide if we have many slides
-        duration_per_slide = 3.0 if len(generated_images) <= 10 else 2.0
-        progress(f"Using {duration_per_slide}s per slide for {len(generated_images)} slides")
+        # Use individual audio files for per-slide durations if available
+        if local_mp3 and len(local_mp3) > 0:
+            progress(f"Using per-slide audio durations for {len(local_mp3)} audio files")
 
-        success = merger.create_video_from_files(
-            slides_dir, output_file,
-            duration_per_slide=duration_per_slide,
-            audio_file=audio_track
-        )
+            # Sort audio files to match slide order
+            sorted_mp3 = sorted(local_mp3)
+
+            # Use the new method that supports per-slide audio durations
+            success = merger.create_video_with_audio_durations(
+                slides_dir, output_file,
+                audio_files=sorted_mp3
+            )
+        else:
+            # Fallback to fixed duration when no audio files available
+            duration_per_slide = 3.0 if len(generated_images) <= 10 else 2.0
+            progress(f"No audio files found, using fixed {duration_per_slide}s per slide for {len(generated_images)} slides")
+
+            success = merger.create_video_from_files(
+                slides_dir, output_file,
+                duration_per_slide=duration_per_slide,
+                audio_file=None
+            )
 
         if not success or not output_file.exists():
             raise RuntimeError("Video creation failed")
