@@ -14,7 +14,8 @@ import threading
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Callable, Tuple
+import subprocess
 
 import uvicorn
 from dotenv import load_dotenv
@@ -510,7 +511,8 @@ async def root():
             "translate_pptx_s3": "/translate/pptx_s3",
             "transcribe_audio_s3": "/transcribe/audio_s3",
             "translate_text_s3": "/translate/text_s3",
-            "translate_course_s3": "/translate/course_s3"
+            "translate_course_s3": "/translate/course_s3",
+            "video_merge_tool_s3": "/video/merge_tool_s3"
         },
         "notes": {
             "single_file_download": "When a task has only one result file, /download/{task_id} returns the file directly",
@@ -1947,10 +1949,9 @@ async def run_course_video_s3_async(task_id: str, course_id: str, language: str,
             # Sort audio files to match slide order
             sorted_mp3 = sorted(local_mp3)
 
-            # Use the new method that supports per-slide audio durations
-            success = merger.create_video_with_audio_durations(
-                slides_dir, output_file,
-                audio_files=sorted_mp3
+            # Create video using course video generation logic with per-slide audio durations
+            success = create_course_video_with_audio_durations(
+                slides_dir, output_file, sorted_mp3, progress
             )
         else:
             # Fallback to fixed duration when no audio files available
@@ -2024,6 +2025,423 @@ async def generate_course_video_s3(
         request.course_id,
         request.language,
         request.output_key,
+    )
+
+    return TaskStatus(task_id=task_id, status="pending")
+
+# --------------------------------------
+# Helper function for course video generation with audio durations
+# --------------------------------------
+def create_course_video_with_audio_durations(slides_dir: Path, output_file: Path,
+                                            audio_files: List[Path],
+                                            progress_callback: Callable[[str], None]) -> bool:
+    """
+    Create course video from PNG slides with individual audio durations.
+    Uses ffmpeg to create video segments and concatenate them.
+    """
+    try:
+        import json
+
+        # Get image files from slides directory
+        image_files = []
+        for file_path in slides_dir.iterdir():
+            if file_path.is_file() and file_path.suffix.lower() in ['.png', '.jpg', '.jpeg']:
+                image_files.append(file_path)
+
+        # Sort files naturally
+        image_files.sort(key=lambda x: str(x.name))
+
+        if len(image_files) != len(audio_files):
+            progress_callback(f"Warning: {len(image_files)} images but {len(audio_files)} audio files")
+
+        # Get duration for each audio file using ffprobe
+        def get_audio_duration(audio_file: Path) -> float:
+            try:
+                cmd = [
+                    'ffprobe',
+                    '-v', 'quiet',
+                    '-print_format', 'json',
+                    '-show_format',
+                    str(audio_file)
+                ]
+                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                data = json.loads(result.stdout)
+                duration = float(data['format']['duration'])
+                progress_callback(f"Audio duration for {audio_file.name}: {duration:.2f}s")
+                return duration
+            except Exception as e:
+                progress_callback(f"Warning: Could not get duration for {audio_file.name}, using 3.0s default")
+                return 3.0
+
+        # Create temporary directory for segments
+        temp_dir = output_file.parent / "temp_course_video_segments"
+        temp_dir.mkdir(exist_ok=True)
+
+        segment_files = []
+
+        # Create video segment for each slide+audio pair
+        for i, (image_file, audio_file) in enumerate(zip(image_files, audio_files)):
+            progress_callback(f"Creating segment {i+1}/{len(image_files)}: {image_file.name} + {audio_file.name}")
+
+            segment_file = temp_dir / f"segment_{i:03d}.mp4"
+            segment_files.append(segment_file)
+
+            # Create video segment with image and audio
+            cmd = [
+                'ffmpeg', '-y',
+                '-loop', '1',
+                '-i', str(image_file),
+                '-i', str(audio_file),
+                '-vf', 'scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2',
+                '-c:v', 'libx264',
+                '-tune', 'stillimage',
+                '-c:a', 'aac',
+                '-b:a', '192k',
+                '-pix_fmt', 'yuv420p',
+                '-r', '30',
+                '-shortest',  # Stop when shortest stream (audio) ends
+                str(segment_file)
+            ]
+
+            result = subprocess.run(cmd, capture_output=True, text=True)
+
+            if result.returncode != 0:
+                progress_callback(f"Error creating segment {i+1}: {result.stderr}")
+                raise RuntimeError(f"ffmpeg error: {result.stderr}")
+
+        # Create concat file for final video assembly
+        concat_file = temp_dir / "concat_list.txt"
+        with open(concat_file, 'w') as f:
+            for segment in segment_files:
+                f.write(f"file '{segment.absolute()}'\n")
+
+        # Concatenate all segments into final video
+        progress_callback("Concatenating all segments into final video...")
+
+        concat_cmd = [
+            'ffmpeg', '-y',
+            '-f', 'concat',
+            '-safe', '0',
+            '-i', str(concat_file),
+            '-c', 'copy',
+            str(output_file)
+        ]
+
+        concat_result = subprocess.run(concat_cmd, capture_output=True, text=True)
+
+        if concat_result.returncode != 0:
+            progress_callback(f"Error concatenating segments: {concat_result.stderr}")
+            raise RuntimeError(f"ffmpeg concatenation error: {concat_result.stderr}")
+
+        progress_callback(f"Successfully created course video: {output_file}")
+
+        # Clean up temporary files
+        progress_callback("Cleaning up temporary files...")
+        for file in segment_files:
+            file.unlink(missing_ok=True)
+        concat_file.unlink(missing_ok=True)
+        temp_dir.rmdir()
+
+        return True
+
+    except Exception as e:
+        progress_callback(f"Error creating course video with audio durations: {e}")
+        return False
+
+# --------------------------------------
+# Video Merge Tool S3 Request (matches MP3+PNG by 2-digit patterns)
+# --------------------------------------
+class VideoMergeToolS3Request(BaseModel):
+    """Request model for merging MP3 + PNG files using VideoMergeTool logic."""
+    input_keys: List[str] = Field(..., description="S3 object keys of the input MP3 and PNG files")
+    output_key: str = Field(..., description="Destination S3 key for the resulting MP4 video")
+    recursive_mode: bool = Field(False, description="If true, process subfolders separately")
+
+# --------------------------------------
+# Background runner for VideoMergeTool-style S3 processing
+# --------------------------------------
+async def run_video_merge_tool_s3_async(task_id: str, input_keys: List[str], output_key: str,
+                                       recursive_mode: bool, temp_dir: Path):
+    """Download MP3/PNG files from S3, match by 2-digit patterns, create MP4 with ffmpeg, upload result."""
+    try:
+        active_tasks[task_id]["status"] = "running"
+
+        def progress(msg: str):
+            active_tasks[task_id]["messages"].append(msg)
+            logger.info(f"Task {task_id}: {msg}")
+
+        # Check ffmpeg availability
+        try:
+            result = subprocess.run(['ffmpeg', '-version'],
+                                   stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE,
+                                   text=True)
+            if result.returncode != 0:
+                raise RuntimeError("ffmpeg command returned non-zero exit code")
+            progress("ffmpeg is available")
+        except FileNotFoundError:
+            raise RuntimeError("ffmpeg not found in PATH. Please install ffmpeg first.")
+
+        s3 = S3ClientWrapper()
+
+        # Create working directories
+        input_dir = temp_dir / "input"
+        output_dir = temp_dir / "output"
+        input_dir.mkdir(parents=True)
+        output_dir.mkdir(parents=True)
+
+        # Download files from S3
+        progress(f"Downloading {len(input_keys)} files from S3...")
+        local_files = s3.download_files(input_keys, input_dir)
+
+        # Separate MP3 and PNG files
+        mp3_files = [f for f in local_files if f.suffix.lower() == '.mp3']
+        png_files = [f for f in local_files if f.suffix.lower() == '.png']
+
+        progress(f"Found {len(mp3_files)} MP3 and {len(png_files)} PNG files")
+
+        if not mp3_files or not png_files:
+            raise ValueError("Need both MP3 and PNG files to create video")
+
+        # Match files by 2-digit identifier (VideoMergeTool logic)
+        file_pairs = match_file_pairs_by_digit_pattern(mp3_files, png_files, progress)
+
+        if not file_pairs:
+            raise ValueError("No matching MP3/PNG pairs found based on 2-digit patterns")
+
+        progress(f"Found {len(file_pairs)} matching pairs")
+
+        # Sort pairs by numeric ID
+        file_pairs.sort(key=lambda x: int(x[0]))
+
+        # Generate output filename (remove 2-digit identifier from first MP3)
+        _, first_mp3, _ = file_pairs[0]
+        mp3_stem = first_mp3.stem
+        import re
+        identifier_pattern = r'[_-](\d{2})(?:[_-])'
+        output_name = re.sub(identifier_pattern, '_', mp3_stem)
+        end_pattern = r'[_-]\d{2}$'
+        output_name = re.sub(end_pattern, '', output_name)
+
+        output_file = output_dir / f"{output_name}.mp4"
+        progress(f"Creating video: {output_file}")
+
+        # Create video using ffmpeg (VideoMergeTool style)
+        create_video_with_ffmpeg_videomergetool(file_pairs, output_file, progress)
+
+        if not output_file.exists():
+            raise RuntimeError("Video creation failed - output file not created")
+
+        # Upload result to S3
+        progress(f"Uploading video to S3: {output_key}")
+        s3._client.upload_file(str(output_file), s3.bucket, output_key)
+
+        active_tasks[task_id]["status"] = "completed"
+        active_tasks[task_id]["result_files"] = [output_key]
+
+    except Exception as e:
+        error_msg = f"VideoMergeTool task {task_id} failed: {e}"
+        logger.error(error_msg, exc_info=True)
+        active_tasks[task_id]["status"] = "failed"
+        active_tasks[task_id]["error"] = str(e)
+    finally:
+        # Clean up temp directory
+        cleanup_temp_dir(temp_dir)
+
+def match_file_pairs_by_digit_pattern(mp3_files: List[Path], png_files: List[Path],
+                                    progress_callback: Callable[[str], None]) -> List[Tuple[str, Path, Path]]:
+    """
+    Match MP3 and PNG files based on 2-digit pattern in filenames.
+    Returns list of (digit_id, mp3_path, png_path) tuples.
+    Based on VideoMergeTool.match_file_pairs logic.
+    """
+    import re
+
+    file_pairs = []
+    mp3_dict = {}
+    png_dict = {}
+
+    # Regex to match exactly two digits not adjacent to other digits
+    id_pattern = re.compile(r'(?<!\d)(\d{2})(?!\d)')
+
+    # Extract indices for PNG files
+    for png_file in png_files:
+        match = id_pattern.search(png_file.name)
+        if match:
+            idx = match.group(1)
+            progress_callback(f"PNG found index {idx} in {png_file.name}")
+            png_dict[idx] = png_file
+
+    # Extract indices for MP3 files
+    for mp3_file in mp3_files:
+        match = id_pattern.search(mp3_file.name)
+        if match:
+            idx = match.group(1)
+            progress_callback(f"MP3 found index {idx} in {mp3_file.name}")
+            mp3_dict[idx] = mp3_file
+
+    # Match pairs by index
+    for idx in sorted(mp3_dict.keys(), key=lambda x: int(x)):
+        mp3_file = mp3_dict[idx]
+        png_file = png_dict.get(idx)
+        if png_file:
+            progress_callback(f"Matched index {idx}: {mp3_file.name} + {png_file.name}")
+            file_pairs.append((idx, mp3_file, png_file))
+        else:
+            progress_callback(f"No PNG match for MP3 index {idx}: {mp3_file.name}")
+
+    return sorted(file_pairs, key=lambda x: int(x[0]))
+
+def create_video_with_ffmpeg_videomergetool(file_pairs: List[Tuple[str, Path, Path]],
+                                           output_file: Path,
+                                           progress_callback: Callable[[str], None]):
+    """
+    Create video from matched MP3/PNG pairs using ffmpeg.
+    Based on VideoMergeTool.create_video_with_ffmpeg logic.
+    Adds 0.2s silence between clips.
+    """
+    import subprocess
+    import tempfile
+
+    try:
+        # Create temporary directory for segments
+        temp_dir = output_file.parent / "temp_video_files"
+        temp_dir.mkdir(exist_ok=True)
+
+        segment_files = []
+
+        # Process each pair and create individual video segments
+        for idx, (numeric_id, mp3_file, png_file) in enumerate(file_pairs):
+            progress_callback(f"Processing pair {idx+1}/{len(file_pairs)}: {numeric_id}")
+
+            # Create segment file path
+            segment_file = temp_dir / f"segment_{idx:03d}.mp4"
+            segment_files.append(segment_file)
+
+            # Run ffmpeg to create video segment from image and audio
+            cmd = [
+                'ffmpeg', '-y',
+                '-loop', '1',
+                '-i', str(png_file),
+                '-i', str(mp3_file),
+                '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2',
+                '-c:v', 'libx264',
+                '-tune', 'stillimage',
+                '-c:a', 'aac',
+                '-b:a', '192k',
+                '-pix_fmt', 'yuv420p',
+                '-shortest',
+                str(segment_file)
+            ]
+
+            progress_callback(f"Creating segment for pair {idx+1}...")
+
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+            if result.returncode != 0:
+                progress_callback(f"Error creating segment {idx+1}: {result.stderr}")
+                raise RuntimeError(f"ffmpeg error: {result.stderr}")
+
+            # Add silence between clips (except after last segment)
+            if idx < len(file_pairs) - 1:
+                silence_file = temp_dir / f"silence_{idx:03d}.mp4"
+                segment_files.append(silence_file)
+
+                # Create 0.2 second silence with the same image
+                silence_cmd = [
+                    'ffmpeg', '-y',
+                    '-loop', '1',
+                    '-i', str(png_file),
+                    '-f', 'lavfi',
+                    '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
+                    '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2',
+                    '-c:v', 'libx264',
+                    '-t', '0.2',  # 0.2 seconds silence
+                    '-c:a', 'aac',
+                    '-pix_fmt', 'yuv420p',
+                    str(silence_file)
+                ]
+
+                progress_callback(f"Adding silence after segment {idx+1}...")
+
+                silence_result = subprocess.run(silence_cmd, stdout=subprocess.PIPE,
+                                              stderr=subprocess.PIPE, text=True)
+
+                if silence_result.returncode != 0:
+                    progress_callback(f"Error creating silence {idx+1}: {silence_result.stderr}")
+                    raise RuntimeError(f"ffmpeg error: {silence_result.stderr}")
+
+        # Create file list for concatenation
+        concat_file = temp_dir / "concat_list.txt"
+        with open(concat_file, 'w') as f:
+            for segment in segment_files:
+                f.write(f"file '{segment.absolute()}'\n")
+
+        # Concatenate all segments into final video
+        progress_callback("Concatenating all segments...")
+
+        concat_cmd = [
+            'ffmpeg', '-y',
+            '-f', 'concat',
+            '-safe', '0',
+            '-i', str(concat_file),
+            '-c', 'copy',
+            str(output_file)
+        ]
+
+        concat_result = subprocess.run(concat_cmd, stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE, text=True)
+
+        if concat_result.returncode != 0:
+            progress_callback(f"Error concatenating: {concat_result.stderr}")
+            raise RuntimeError(f"ffmpeg error: {concat_result.stderr}")
+
+        progress_callback(f"Successfully created video: {output_file}")
+
+        # Clean up temporary files
+        progress_callback("Cleaning up temporary files...")
+        for file in segment_files:
+            file.unlink(missing_ok=True)
+        concat_file.unlink(missing_ok=True)
+        temp_dir.rmdir()
+
+    except Exception as e:
+        error_msg = f"Error creating video with VideoMergeTool logic: {str(e)}"
+        progress_callback(error_msg)
+        raise RuntimeError(error_msg)
+
+# --------------------------------------
+# VideoMergeTool API Endpoint
+# --------------------------------------
+@app.post("/video/merge_tool_s3", response_model=TaskStatus)
+async def video_merge_tool_s3(
+    request: VideoMergeToolS3Request,
+    background_tasks: BackgroundTasks,
+    token: str = Depends(verify_token)
+):
+    """
+    Merge MP3 and PNG files using VideoMergeTool logic:
+    - Matches files by 2-digit number patterns in filenames
+    - Creates MP4 video using ffmpeg with 0.2s silence between clips
+    - Supports the same matching logic as the VideoMergeTool from main.py
+    """
+    task_id = create_task_id()
+    temp_dir = get_temp_dir()
+
+    active_tasks[task_id] = {
+        "status": "pending",
+        "temp_dir": temp_dir,
+        "messages": [],
+    }
+
+    # Start background task
+    background_tasks.add_task(
+        run_video_merge_tool_s3_async,
+        task_id,
+        request.input_keys,
+        request.output_key,
+        request.recursive_mode,
+        temp_dir,
     )
 
     return TaskStatus(task_id=task_id, status="pending")
