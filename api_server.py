@@ -1090,12 +1090,19 @@ class TTSS3Request(BaseModel):
 # New request model for direct text-to-speech with S3 upload (no TXT).
 # -------------------------------------------------------------------
 
+class ProfessorInfo(BaseModel):
+    """Professor information for voice matching."""
+    id: str = Field(..., description="Professor ID")
+    name: str = Field(..., description="Professor name")
+    is_coordinator: bool = Field(..., description="Whether this professor is the course coordinator")
+
 class TTSTextRequest(BaseModel):
     """Request body for generating speech from a raw text string and uploading the result to S3."""
 
     text: str = Field(..., description="Text content to convert to speech")
     output_key: str = Field(..., description="Destination S3 key (path + filename) for the generated MP3, e.g. 'audio/course/00.mp3'")
     voice_id: Optional[str] = Field(None, description="ElevenLabs voice_id to use (optional)")
+    professors: Optional[List[ProfessorInfo]] = Field(None, description="List of professors for voice matching (used if voice_id not provided)")
 
 # --------------------------------------
 # Background runners for S3 workflows
@@ -1545,7 +1552,7 @@ async def run_tts_s3_async(task_id: str, input_keys: List[str], output_prefix: O
 # Background runner for direct Text -> Speech (upload to S3)
 # --------------------------------------
 
-async def run_tts_text_s3_async(task_id: str, text: str, output_key: str, voice_id: Optional[str], temp_dir: Path):
+async def run_tts_text_s3_async(task_id: str, text: str, output_key: str, voice_id: Optional[str], temp_dir: Path, professors: Optional[List[dict]] = None):
     """Generate audio from raw text and upload to S3 at *output_key*."""
 
     try:
@@ -1575,12 +1582,24 @@ async def run_tts_text_s3_async(task_id: str, text: str, output_key: str, voice_
 
         tts = TextToSpeechCore(elevenlabs_key, progress)
 
-        # If voice_id explicitly provided we bypass filename detection
-        if voice_id:
-            success = tts.generate_audio(input_path, output_path, voice_id)
+        # Determine voice_id to use
+        final_voice_id = voice_id
+
+        # If no voice_id provided, try professor voice matching
+        if not final_voice_id and professors:
+            voices_data = load_voices_data()
+            final_voice_id = select_voice_for_course(professors, voices_data)
+            if final_voice_id:
+                progress(f"Using professor-matched voice: {final_voice_id}")
+
+        # Generate audio with determined voice
+        if final_voice_id:
+            success = tts.generate_audio(input_path, output_path, final_voice_id)
         else:
             # Use helper that auto-detects voice from filename (will pick default)
             success = tts.text_to_speech_file(input_path, output_path)
+            if not final_voice_id:
+                progress("Using default voice selection (no voice_id or professor match)")
 
         if not success:
             raise RuntimeError("Failed to generate audio from text")
@@ -1798,6 +1817,18 @@ async def text_to_speech_text_s3(
         "messages": []
     }
 
+    # Convert professors to dict format for background task
+    professors_data = None
+    if request.professors:
+        professors_data = [
+            {
+                "id": prof.id,
+                "name": prof.name,
+                "is_coordinator": prof.is_coordinator
+            }
+            for prof in request.professors
+        ]
+
     background_tasks.add_task(
         run_tts_text_s3_async,
         task_id,
@@ -1805,6 +1836,7 @@ async def text_to_speech_text_s3(
         request.output_key,
         request.voice_id,
         temp_dir,
+        professors_data,
     )
 
     return TaskStatus(task_id=task_id, status="pending")
@@ -1817,12 +1849,13 @@ class CourseVideoS3Request(BaseModel):
     course_id: str = Field(..., description="Unique identifier of the course")
     language: str = Field(..., description="Language of the course (ISO-639-1)")
     output_key: Optional[str] = Field(None, description="Destination S3 key for the resulting MP4. Defaults to 'contribute/<course_id>/<language>/video.mp4'")
+    professors: Optional[List[ProfessorInfo]] = Field(None, description="List of professors associated with this course for voice matching")
 
 
 # --------------------------------------
 # Background runner for Course Video Generation from S3
 # --------------------------------------
-async def run_course_video_s3_async(task_id: str, course_id: str, language: str, output_key: Optional[str]):
+async def run_course_video_s3_async(task_id: str, course_id: str, language: str, output_key: Optional[str], professors: Optional[List[dict]] = None):
     """Generate a complete course video by converting PPTX→PNG and merging with existing MP3 files."""
     temp_root = None
     try:
@@ -1871,8 +1904,35 @@ async def run_course_video_s3_async(task_id: str, course_id: str, language: str,
         mp3_keys = [k for k in all_files if k.lower().endswith('.mp3') and not Path(k).name.startswith('.')]
         progress(f"Found {len(mp3_keys)} MP3 files: {[Path(k).name for k in mp3_keys]}")
 
+        # Load voices data for potential TTS generation
+        voices_data = load_voices_data()
+        selected_voice_id = None
+
         if not mp3_keys:
-            progress("Warning: No MP3 audio tracks found – video will be silent")
+            progress("No MP3 audio tracks found")
+
+            # Try to use professor voice matching for TTS generation
+            if professors and voices_data:
+                progress(f"Attempting voice matching for {len(professors)} professors...")
+                selected_voice_id = select_voice_for_course(professors, voices_data)
+
+                if selected_voice_id:
+                    progress(f"Selected voice ID for course: {selected_voice_id}")
+                    # Note: TTS generation would require text content which isn't implemented here
+                    # This is a placeholder for future TTS integration
+                else:
+                    progress("No matching professor voices found")
+
+            if not selected_voice_id:
+                progress("Warning: No MP3 audio tracks found and no voice match available – video will be silent")
+        else:
+            # Log professor info even when MP3s exist (for debugging)
+            if professors:
+                progress(f"Professor info available: {[p['name'] for p in professors]} (using existing MP3s)")
+                # Still try voice matching for logging/debugging purposes
+                selected_voice_id = select_voice_for_course(professors, voices_data)
+                if selected_voice_id:
+                    progress(f"Note: Professor voice match available ({selected_voice_id}) but using existing MP3 files")
 
         # Create temp dirs
         import tempfile
@@ -2018,6 +2078,18 @@ async def generate_course_video_s3(
         "result_files": [],
     }
 
+    # Convert professors to dict format for background task
+    professors_data = None
+    if request.professors:
+        professors_data = [
+            {
+                "id": prof.id,
+                "name": prof.name,
+                "is_coordinator": prof.is_coordinator
+            }
+            for prof in request.professors
+        ]
+
     # Start background task
     background_tasks.add_task(
         run_course_video_s3_async,
@@ -2025,6 +2097,7 @@ async def generate_course_video_s3(
         request.course_id,
         request.language,
         request.output_key,
+        professors_data,
     )
 
     return TaskStatus(task_id=task_id, status="pending")
@@ -2445,6 +2518,130 @@ async def video_merge_tool_s3(
     )
 
     return TaskStatus(task_id=task_id, status="pending")
+
+# Add this after the existing imports at the top
+def match_professor_voice(professor_name: str, voices_data: dict) -> Optional[str]:
+    """
+    Match a professor name with available ElevenLabs voices.
+    Returns the voice_id if a match is found, None otherwise.
+
+    Based on the voice-teacher matching analysis:
+    - Exact matches: David St-Onge, Théo Mogenet, Rogzy, Giacomo, Fanis
+    - Likely matches: Loïc/Loic, Damien, Renaud, Pantamis/Théo Pantamis
+    """
+    if not professor_name or not voices_data:
+        return None
+
+    # Get voice mapping from voices data
+    voice_map = voices_data.get("voice_map", {})
+    if not voice_map:
+        logger.warning("No voice map found in voices data")
+        return None
+
+    # Normalize professor name for comparison
+    name_lower = professor_name.lower().strip()
+
+    # Define exact matches (professor name -> voice name in ElevenLabs)
+    exact_matches = {
+        "david st-onge": "David St-Onge",
+        "théo mogenet": "Théo Mogenet",
+        "theo mogenet": "Théo Mogenet",  # without accent
+        "rogzy": "rogzy",
+        "giacomo zucco": "Giacomo",
+        "giacomo": "Giacomo",
+        "fanis michalakis": "Fanis",
+        "fanis": "Fanis",
+    }
+
+    # Define likely matches (professor name -> voice name in ElevenLabs)
+    likely_matches = {
+        "loïc morel": "Loic",
+        "loic morel": "Loic",  # without accent
+        "loïc": "Loic",
+        "loic": "Loic",
+        "damien theillier": "Damien",
+        "damien": "Damien",
+        "renaud lifchitz": "renaud ",
+        "renaud": "renaud ",
+        "théo pantamis": "Pantamis",
+        "theo pantamis": "Pantamis",  # without accent
+        "pantamis": "Pantamis",
+    }
+
+    # Check exact matches first
+    if name_lower in exact_matches:
+        voice_name = exact_matches[name_lower]
+        voice_id = voice_map.get(voice_name)
+        if voice_id:
+            logger.info(f"Exact voice match: '{professor_name}' -> '{voice_name}' ({voice_id})")
+            return voice_id
+
+    # Check likely matches
+    if name_lower in likely_matches:
+        voice_name = likely_matches[name_lower]
+        voice_id = voice_map.get(voice_name)
+        if voice_id:
+            logger.info(f"Likely voice match: '{professor_name}' -> '{voice_name}' ({voice_id})")
+            return voice_id
+
+    # Try partial name matching for multi-language variants
+    # Check if professor name contains "rogzy" - handle multiple Rogzy variants
+    if "rogzy" in name_lower:
+        # Default to French version, but could be enhanced to detect language context
+        voice_id = voice_map.get("rogzy")  # French version
+        if voice_id:
+            logger.info(f"Rogzy variant match: '{professor_name}' -> 'rogzy' ({voice_id})")
+            return voice_id
+
+    # No match found
+    logger.info(f"No voice match found for professor: '{professor_name}'")
+    return None
+
+def load_voices_data() -> dict:
+    """Load the ElevenLabs voices configuration data."""
+    voices_file = Path("elevenlabs_voices.json")
+    try:
+        if voices_file.exists():
+            with open(voices_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        else:
+            logger.warning("ElevenLabs voices file not found")
+            return {}
+    except Exception as e:
+        logger.error(f"Error loading voices data: {e}")
+        return {}
+
+def select_voice_for_course(professors: List[dict], voices_data: dict) -> Optional[str]:
+    """
+    Select the most appropriate voice for a course based on its professors.
+    Prioritizes coordinators over associated professors.
+
+    Args:
+        professors: List of professor dicts with 'name', 'id', 'is_coordinator' fields
+        voices_data: Loaded voices configuration data
+
+    Returns:
+        voice_id string if a match is found, None otherwise
+    """
+    if not professors or not voices_data:
+        return None
+
+    # Sort professors - coordinators first, then by name
+    sorted_professors = sorted(professors,
+                             key=lambda p: (not p.get('is_coordinator', False), p.get('name', '')))
+
+    # Try to find a voice match, starting with coordinators
+    for professor in sorted_professors:
+        professor_name = professor.get('name', '')
+        if professor_name:
+            voice_id = match_professor_voice(professor_name, voices_data)
+            if voice_id:
+                coordinator_status = "coordinator" if professor.get('is_coordinator') else "associated"
+                logger.info(f"Selected voice for course: {professor_name} ({coordinator_status}) -> {voice_id}")
+                return voice_id
+
+    logger.info("No matching voices found for any course professors")
+    return None
 
 if __name__ == "__main__":
     # Run the server
