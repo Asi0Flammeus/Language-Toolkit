@@ -92,6 +92,9 @@ class ToolBase:
         # Add selection mode variable
         self.selection_mode = tk.StringVar(value="file")  # "file" or "folder"
         
+        # Add output checking option
+        self.check_output_exists = tk.BooleanVar(value=True)  # Default to checking if output exists
+        
         # Define supported extensions for the tool (to be overridden by child classes)
         self.supported_extensions = set()
         
@@ -290,6 +293,25 @@ class ToolBase:
     def process_file(self, input_file: Path, output_dir: Path):
         """Abstract method for processing a single file."""
         raise NotImplementedError("Subclasses must implement process_file()")
+    
+    def should_skip_file(self, input_file: Path, output_dir: Path, output_extension: str = None) -> bool:
+        """Check if processing should be skipped based on existing output."""
+        if not self.check_output_exists.get():
+            return False
+        
+        # If no specific extension provided, cannot check
+        if not output_extension:
+            return False
+            
+        # Construct expected output filename
+        output_filename = input_file.stem + output_extension
+        output_file = output_dir / output_filename
+        
+        if output_file.exists():
+            self.send_progress_update(f"Skipping {input_file.name} - output already exists: {output_file.name}")
+            return True
+        
+        return False
 
     def handle_drop(self, event):
         """Handles drag and drop events."""
@@ -476,6 +498,10 @@ class TextToSpeechTool(ToolBase):
     def process_file(self, input_file: Path, output_dir: Path):
         """Processes a single text file for TTS conversion."""
         try:
+            # Check if should skip
+            if self.should_skip_file(input_file, output_dir, '.mp3'):
+                return
+            
             self.send_progress_update(f"Processing {input_file.name}...")
             
             # Check for interruption
@@ -692,6 +718,12 @@ class PPTXTranslationTool(ToolBase, LanguageSelectionMixin):
         """Processes a single PPTX file."""
         if input_file.suffix.lower() != ".pptx":
             self.send_progress_update(f"Skipping non-PPTX file: {input_file}")
+            return
+        
+        # Check if should skip - PPTX files append target language before extension
+        output_filename = f"{input_file.stem}_{self.target_lang.get()}{input_file.suffix}"
+        if self.check_output_exists.get() and (output_dir / output_filename).exists():
+            self.send_progress_update(f"Skipping {input_file.name} - output already exists: {output_filename}")
             return
 
         try:
@@ -932,6 +964,12 @@ class AudioTranscriptionTool(ToolBase):
     def process_file(self, input_file: Path, output_dir: Path):
         """Processes a single audio file."""
         try:
+            # Check if should skip - audio transcripts append _transcript.txt
+            output_filename = f"{input_file.stem}_transcript.txt"
+            if self.check_output_exists.get() and (output_dir / output_filename).exists():
+                self.send_progress_update(f"Skipping {input_file.name} - output already exists: {output_filename}")
+                return
+                
             self.send_progress_update(f"Transcribing {input_file.name}...")
             transcript = self.transcribe_audio(input_file, output_dir)
             self.save_transcript(transcript, input_file, output_dir)
@@ -1059,6 +1097,12 @@ class TextTranslationTool(ToolBase, LanguageSelectionMixin):
     def process_file(self, input_file: Path, output_dir: Path):
         """Processes a single text file."""
         try:
+            # Check if should skip - text files append target language before extension
+            output_filename = f"{input_file.stem}_{self.target_lang.get()}{input_file.suffix}"
+            if self.check_output_exists.get() and (output_dir / output_filename).exists():
+                self.send_progress_update(f"Skipping {input_file.name} - output already exists: {output_filename}")
+                return
+                
             self.send_progress_update(f"Translating {input_file.name}...")
             
             # Check for interruption
@@ -1066,7 +1110,7 @@ class TextTranslationTool(ToolBase, LanguageSelectionMixin):
                 raise InterruptedError("Processing stopped by user")
 
             # Create output file path
-            output_file = output_dir / f"{input_file.stem}_{self.target_lang.get()}{input_file.suffix}"
+            output_file = output_dir / output_filename
 
             # Read source file
             with open(input_file, 'r', encoding='utf-8') as f:
@@ -1203,6 +1247,26 @@ class PPTXtoPDFTool(ToolBase):
         """
         try:
             output_format = self.output_format.get()
+            
+            # Check if should skip based on output format
+            if self.check_output_exists.get():
+                skip = False
+                if output_format == 'pdf':
+                    output_file = output_dir / f"{input_file.stem}.pdf"
+                    if output_file.exists():
+                        self.send_progress_update(f"Skipping {input_file.name} - output already exists: {output_file.name}")
+                        skip = True
+                elif output_format in ['png', 'webp']:
+                    # Check if first slide exists (00 file)
+                    ext = '.png' if output_format == 'png' else '.webp'
+                    first_slide = output_dir / f"{input_file.stem}_00{ext}"
+                    if first_slide.exists():
+                        self.send_progress_update(f"Skipping {input_file.name} - output already exists: {first_slide.name}")
+                        skip = True
+                
+                if skip:
+                    return
+            
             self.send_progress_update(f"Converting {input_file.name} to {output_format.upper()}...")
 
             # Ensure output directory exists
@@ -1515,6 +1579,11 @@ class VideoMergeTool(ToolBase):
         Handles adding silence between clips.
         """
         try:
+            # Check if should skip
+            if self.check_output_exists.get() and output_file.exists():
+                self.send_progress_update(f"Skipping video creation - output already exists: {output_file.name}")
+                return
+                
             # Create a temporary directory for intermediate files
             temp_dir = output_file.parent / "temp_video_files"
             temp_dir.mkdir(exist_ok=True)
@@ -2406,6 +2475,17 @@ class MainApp(TkinterDnD.Tk):
         tool.output_path_display = tk.Text(output_frame, height=1, width=50)
         tool.output_path_display.pack(side=tk.LEFT, padx=5, fill='x', expand=True)
         tool.output_path_display.configure(state='disabled')
+
+        # Output checking option
+        check_frame = ttk.Frame(frame)
+        check_frame.pack(pady=5, fill='x', padx=5)
+        
+        check_output_checkbox = ttk.Checkbutton(
+            check_frame,
+            text="Skip processing if output already exists",
+            variable=tool.check_output_exists
+        )
+        check_output_checkbox.pack(side=tk.LEFT, padx=5)
 
         # Button Frame
         button_frame = ttk.Frame(frame)
