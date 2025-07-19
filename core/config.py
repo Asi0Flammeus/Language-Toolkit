@@ -18,8 +18,10 @@ Features:
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Dict, Any, Optional
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +61,12 @@ class ConfigManager:
         self.config_file = Path.home() / "Documents" / "Language Toolkit" / "config.json"
         self.project_api_keys_file = Path(__file__).parent.parent / "api_keys.json"
         self.config_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Load environment variables
+        env_path = Path(__file__).parent.parent / ".env"
+        if env_path.exists():
+            load_dotenv(env_path)
+        
         self.load_config()
         
     def load_config(self):
@@ -121,7 +129,29 @@ class ConfigManager:
         return self.config.get("languages", {}).get("supported", [])
     
     def get_api_keys(self) -> Dict[str, str]:
-        """Get stored API keys."""
+        """Get stored API keys - prioritize .env over JSON files."""
+        api_keys = {}
+        
+        # First try to get keys from environment variables
+        env_mapping = {
+            "openai": "OPENAI_API_KEY",
+            "anthropic": "ANTHROPIC_API_KEY", 
+            "deepl": "DEEPL_API_KEY",
+            "convertapi": "CONVERTAPI_KEY",
+            "elevenlabs": "ELEVENLABS_API_KEY"
+        }
+        
+        for key, env_var in env_mapping.items():
+            env_value = os.getenv(env_var)
+            if env_value:
+                api_keys[key] = env_value
+        
+        # If we got keys from env, return them
+        if api_keys:
+            logger.info("Loaded API keys from environment variables")
+            return api_keys
+        
+        # Otherwise fall back to JSON files
         if self.use_project_api_keys:
             # Load API keys from project-local file
             try:
