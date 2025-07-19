@@ -2521,76 +2521,34 @@ async def video_merge_tool_s3(
 
 # Add this after the existing imports at the top
 def match_professor_voice(professor_name: str, voices_data: dict) -> Optional[str]:
-    """
-    Match a professor name with available ElevenLabs voices.
-    Returns the voice_id if a match is found, None otherwise.
+    """Return the ElevenLabs *voice_id* that exactly matches the given professor name.
 
-    Based on the voice-teacher matching analysis:
-    - Exact matches: David St-Onge, Théo Mogenet, Rogzy, Giacomo, Fanis
-    - Likely matches: Loïc/Loic, Damien, Renaud, Pantamis/Théo Pantamis
+    The previous implementation maintained large hard-coded dictionaries to map
+    professor names to voice names.  This is no longer necessary because the
+    calling application now provides the correct professor name (or voice_id);
+    the Language-Toolkit only needs to resolve that name in the *voices_data*
+    mapping it loads from *elevenlabs_voices.json*.
+
+    Matching is performed case-insensitively against the keys in
+    ``voices_data["voice_map"]``.  If no match is found, the function returns
+    ``None`` and the caller can fall back to its default behaviour.
     """
+
     if not professor_name or not voices_data:
         return None
 
-    # Get voice mapping from voices data
-    voice_map = voices_data.get("voice_map", {})
+    voice_map: dict = voices_data.get("voice_map", {})
     if not voice_map:
         logger.warning("No voice map found in voices data")
         return None
 
-    # Normalize professor name for comparison
+    # Perform a case-insensitive lookup
     name_lower = professor_name.lower().strip()
-
-    # Define exact matches (professor name -> voice name in ElevenLabs)
-    exact_matches = {
-        "david st-onge": "David St-Onge",
-        "théo mogenet": "Théo Mogenet",
-        "theo mogenet": "Théo Mogenet",  # without accent
-        "rogzy": "rogzy",
-        "giacomo zucco": "Giacomo",
-        "giacomo": "Giacomo",
-        "fanis michalakis": "Fanis",
-        "fanis": "Fanis",
-    }
-
-    # Define likely matches (professor name -> voice name in ElevenLabs)
-    likely_matches = {
-        "loïc morel": "Loic",
-        "loic morel": "Loic",  # without accent
-        "loïc": "Loic",
-        "loic": "Loic",
-        "damien theillier": "Damien",
-        "damien": "Damien",
-        "renaud lifchitz": "renaud ",
-        "renaud": "renaud ",
-        "théo pantamis": "Pantamis",
-        "theo pantamis": "Pantamis",  # without accent
-        "pantamis": "Pantamis",
-    }
-
-    # Check exact matches first
-    if name_lower in exact_matches:
-        voice_name = exact_matches[name_lower]
-        voice_id = voice_map.get(voice_name)
-        if voice_id:
-            logger.info(f"Exact voice match: '{professor_name}' -> '{voice_name}' ({voice_id})")
-            return voice_id
-
-    # Check likely matches
-    if name_lower in likely_matches:
-        voice_name = likely_matches[name_lower]
-        voice_id = voice_map.get(voice_name)
-        if voice_id:
-            logger.info(f"Likely voice match: '{professor_name}' -> '{voice_name}' ({voice_id})")
-            return voice_id
-
-    # Try partial name matching for multi-language variants
-    # Check if professor name contains "rogzy" - handle multiple Rogzy variants
-    if "rogzy" in name_lower:
-        # Default to French version, but could be enhanced to detect language context
-        voice_id = voice_map.get("rogzy")  # French version
-        if voice_id:
-            logger.info(f"Rogzy variant match: '{professor_name}' -> 'rogzy' ({voice_id})")
+    for voice_name, voice_id in voice_map.items():
+        if voice_name.lower() == name_lower:
+            logger.info(
+                f"Voice match: '{professor_name}' -> '{voice_name}' ({voice_id})"
+            )
             return voice_id
 
     # No match found
