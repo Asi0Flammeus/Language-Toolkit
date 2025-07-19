@@ -16,6 +16,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union, Callable, Tuple
 import subprocess
+import time
+import requests
+import boto3
+from botocore.exceptions import ClientError, BotoCoreError
 
 import uvicorn
 from dotenv import load_dotenv
@@ -792,10 +796,358 @@ async def root() -> Dict[str, Any]:
         }
     }
 
+# Health Check Infrastructure
+# -----------------------------
+class HealthStatus:
+    """Health status constants"""
+    HEALTHY = "healthy"
+    DEGRADED = "degraded"
+    UNHEALTHY = "unhealthy"
+
+class HealthCache:
+    """Simple cache for health check results"""
+    def __init__(self, ttl_seconds: int = 30):
+        self.cache = {}
+        self.ttl = ttl_seconds
+    
+    def get(self, key: str) -> Optional[dict]:
+        if key in self.cache:
+            result, timestamp = self.cache[key]
+            if time.time() - timestamp < self.ttl:
+                return result
+            else:
+                del self.cache[key]
+        return None
+    
+    def set(self, key: str, value: dict):
+        self.cache[key] = (value, time.time())
+
+# Global health cache instance
+health_cache = HealthCache(ttl_seconds=30)
+
+async def check_dependency_with_timeout(check_func: Callable, timeout: float = 5.0) -> dict:
+    """Run a health check function with timeout"""
+    try:
+        # Create a task that can be cancelled
+        task = asyncio.create_task(asyncio.to_thread(check_func))
+        result = await asyncio.wait_for(task, timeout=timeout)
+        return result
+    except asyncio.TimeoutError:
+        return {
+            "status": HealthStatus.UNHEALTHY,
+            "error": f"Health check timed out after {timeout}s"
+        }
+    except Exception as e:
+        return {
+            "status": HealthStatus.UNHEALTHY,
+            "error": str(e)
+        }
+
+def check_s3_health() -> dict:
+    """Check S3 connectivity and accessibility"""
+    try:
+        start_time = time.time()
+        
+        # Get S3 client
+        s3_client = boto3.client('s3')
+        
+        # List buckets to test connectivity
+        response = s3_client.list_buckets()
+        
+        latency_ms = int((time.time() - start_time) * 1000)
+        
+        return {
+            "status": HealthStatus.HEALTHY,
+            "latency_ms": latency_ms,
+            "buckets_accessible": len(response.get('Buckets', []))
+        }
+    except (ClientError, BotoCoreError) as e:
+        return {
+            "status": HealthStatus.UNHEALTHY,
+            "error": f"S3 error: {str(e)}"
+        }
+    except Exception as e:
+        return {
+            "status": HealthStatus.UNHEALTHY,
+            "error": f"Unexpected error: {str(e)}"
+        }
+
+def check_deepl_health() -> dict:
+    """Check DeepL API key validity and quota"""
+    try:
+        api_keys = config_manager.get_api_keys()
+        deepl_key = api_keys.get("deepl")
+        
+        if not deepl_key:
+            return {
+                "status": HealthStatus.UNHEALTHY,
+                "error": "DeepL API key not configured"
+            }
+        
+        # Check usage and limits
+        headers = {"Authorization": f"DeepL-Auth-Key {deepl_key}"}
+        response = requests.get("https://api-free.deepl.com/v2/usage", headers=headers, timeout=3)
+        
+        if response.status_code == 200:
+            usage_data = response.json()
+            character_count = usage_data.get("character_count", 0)
+            character_limit = usage_data.get("character_limit", 0)
+            
+            remaining = character_limit - character_count if character_limit > 0 else None
+            
+            # Consider degraded if less than 10% quota remaining
+            if remaining is not None and character_limit > 0:
+                usage_percent = (character_count / character_limit) * 100
+                status = HealthStatus.DEGRADED if usage_percent > 90 else HealthStatus.HEALTHY
+            else:
+                status = HealthStatus.HEALTHY
+            
+            return {
+                "status": status,
+                "quota_used": character_count,
+                "quota_limit": character_limit,
+                "quota_remaining": remaining
+            }
+        else:
+            return {
+                "status": HealthStatus.UNHEALTHY,
+                "error": f"DeepL API error: {response.status_code}"
+            }
+    except requests.RequestException as e:
+        return {
+            "status": HealthStatus.UNHEALTHY,
+            "error": f"DeepL request failed: {str(e)}"
+        }
+    except Exception as e:
+        return {
+            "status": HealthStatus.UNHEALTHY,
+            "error": f"DeepL check error: {str(e)}"
+        }
+
+def check_openai_health() -> dict:
+    """Check OpenAI API key validity"""
+    try:
+        api_keys = config_manager.get_api_keys()
+        openai_key = api_keys.get("openai")
+        
+        if not openai_key:
+            return {
+                "status": HealthStatus.UNHEALTHY,
+                "error": "OpenAI API key not configured"
+            }
+        
+        # Test with a simple models list request
+        headers = {"Authorization": f"Bearer {openai_key}"}
+        response = requests.get("https://api.openai.com/v1/models", headers=headers, timeout=3)
+        
+        if response.status_code == 200:
+            return {"status": HealthStatus.HEALTHY}
+        elif response.status_code == 401:
+            return {
+                "status": HealthStatus.UNHEALTHY,
+                "error": "Invalid OpenAI API key"
+            }
+        elif response.status_code == 429:
+            return {
+                "status": HealthStatus.DEGRADED,
+                "error": "OpenAI rate limited"
+            }
+        else:
+            return {
+                "status": HealthStatus.UNHEALTHY,
+                "error": f"OpenAI API error: {response.status_code}"
+            }
+    except requests.RequestException as e:
+        return {
+            "status": HealthStatus.UNHEALTHY,
+            "error": f"OpenAI request failed: {str(e)}"
+        }
+    except Exception as e:
+        return {
+            "status": HealthStatus.UNHEALTHY,
+            "error": f"OpenAI check error: {str(e)}"
+        }
+
+def check_elevenlabs_health() -> dict:
+    """Check ElevenLabs API key validity"""
+    try:
+        api_keys = config_manager.get_api_keys()
+        elevenlabs_key = api_keys.get("elevenlabs")
+        
+        if not elevenlabs_key:
+            return {
+                "status": HealthStatus.UNHEALTHY,
+                "error": "ElevenLabs API key not configured"
+            }
+        
+        # Test with user info endpoint
+        headers = {"xi-api-key": elevenlabs_key}
+        response = requests.get("https://api.elevenlabs.io/v1/user", headers=headers, timeout=3)
+        
+        if response.status_code == 200:
+            user_data = response.json()
+            subscription = user_data.get("subscription", {})
+            quota_used = subscription.get("character_count", 0)
+            quota_limit = subscription.get("character_limit", 0)
+            
+            remaining = quota_limit - quota_used if quota_limit > 0 else None
+            
+            # Consider degraded if less than 10% quota remaining
+            if remaining is not None and quota_limit > 0:
+                usage_percent = (quota_used / quota_limit) * 100
+                status = HealthStatus.DEGRADED if usage_percent > 90 else HealthStatus.HEALTHY
+            else:
+                status = HealthStatus.HEALTHY
+            
+            return {
+                "status": status,
+                "quota_used": quota_used,
+                "quota_limit": quota_limit,
+                "quota_remaining": remaining
+            }
+        elif response.status_code == 401:
+            return {
+                "status": HealthStatus.UNHEALTHY,
+                "error": "Invalid ElevenLabs API key"
+            }
+        elif response.status_code == 429:
+            return {
+                "status": HealthStatus.DEGRADED,
+                "error": "ElevenLabs rate limited"
+            }
+        else:
+            return {
+                "status": HealthStatus.UNHEALTHY,
+                "error": f"ElevenLabs API error: {response.status_code}"
+            }
+    except requests.RequestException as e:
+        return {
+            "status": HealthStatus.UNHEALTHY,
+            "error": f"ElevenLabs request failed: {str(e)}"
+        }
+    except Exception as e:
+        return {
+            "status": HealthStatus.UNHEALTHY,
+            "error": f"ElevenLabs check error: {str(e)}"
+        }
+
+def check_convertapi_health() -> dict:
+    """Check ConvertAPI key validity"""
+    try:
+        api_keys = config_manager.get_api_keys()
+        convertapi_key = api_keys.get("convertapi")
+        
+        if not convertapi_key:
+            return {
+                "status": HealthStatus.UNHEALTHY,
+                "error": "ConvertAPI key not configured"
+            }
+        
+        # Test with a simple user info request
+        response = requests.get(f"https://v2.convertapi.com/user?Secret={convertapi_key}", timeout=3)
+        
+        if response.status_code == 200:
+            user_data = response.json()
+            seconds_left = user_data.get("SecondsLeft", 0)
+            
+            # Consider degraded if less than 100 seconds remaining
+            status = HealthStatus.DEGRADED if seconds_left < 100 else HealthStatus.HEALTHY
+            
+            return {
+                "status": status,
+                "seconds_remaining": seconds_left
+            }
+        elif response.status_code == 401:
+            return {
+                "status": HealthStatus.UNHEALTHY,
+                "error": "Invalid ConvertAPI key"
+            }
+        else:
+            return {
+                "status": HealthStatus.UNHEALTHY,
+                "error": f"ConvertAPI error: {response.status_code}"
+            }
+    except requests.RequestException as e:
+        return {
+            "status": HealthStatus.UNHEALTHY,
+            "error": f"ConvertAPI request failed: {str(e)}"
+        }
+    except Exception as e:
+        return {
+            "status": HealthStatus.UNHEALTHY,
+            "error": f"ConvertAPI check error: {str(e)}"
+        }
+
 @app.get("/health")
-async def health_check() -> Dict[str, str]:
-    """Health check endpoint"""
-    return {"status": "healthy", "message": "API is running"}
+async def health_check() -> Dict[str, Any]:
+    """Enhanced health check endpoint with dependency monitoring"""
+    
+    # Check cache first
+    cached_result = health_cache.get("full_health")
+    if cached_result:
+        return cached_result
+    
+    start_time = time.time()
+    
+    # Define dependency checks
+    dependency_checks = {
+        "s3": check_s3_health,
+        "deepl": check_deepl_health,
+        "openai": check_openai_health,
+        "elevenlabs": check_elevenlabs_health,
+        "convertapi": check_convertapi_health
+    }
+    
+    # Run all dependency checks concurrently with timeout
+    dependencies = {}
+    check_tasks = []
+    
+    for service_name, check_func in dependency_checks.items():
+        task = check_dependency_with_timeout(check_func, timeout=3.0)
+        check_tasks.append((service_name, task))
+    
+    # Wait for all checks to complete
+    for service_name, task in check_tasks:
+        try:
+            result = await task
+            dependencies[service_name] = result
+        except Exception as e:
+            dependencies[service_name] = {
+                "status": HealthStatus.UNHEALTHY,
+                "error": f"Check failed: {str(e)}"
+            }
+    
+    # Determine overall status
+    overall_status = HealthStatus.HEALTHY
+    unhealthy_count = 0
+    degraded_count = 0
+    
+    for service_name, result in dependencies.items():
+        if result["status"] == HealthStatus.UNHEALTHY:
+            unhealthy_count += 1
+        elif result["status"] == HealthStatus.DEGRADED:
+            degraded_count += 1
+    
+    # Overall status logic
+    if unhealthy_count > 0:
+        overall_status = HealthStatus.DEGRADED if unhealthy_count <= 2 else HealthStatus.UNHEALTHY
+    elif degraded_count > 0:
+        overall_status = HealthStatus.DEGRADED
+    
+    total_time = int((time.time() - start_time) * 1000)
+    
+    result = {
+        "status": overall_status,
+        "version": "1.0.0",
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "check_duration_ms": total_time,
+        "dependencies": dependencies
+    }
+    
+    # Cache the result
+    health_cache.set("full_health", result)
+    
+    return result
 
 @app.post("/token")
 async def generate_token(form_data: OAuth2PasswordRequestForm = Depends()):
