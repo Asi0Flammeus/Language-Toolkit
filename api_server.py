@@ -113,6 +113,13 @@ SECRET_KEY = os.getenv("SECRET_KEY", "CHANGE_ME")  # Override in production
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
 
+# File upload configuration
+# -----------------------------
+MAX_FILE_SIZE = int(os.getenv("MAX_FILE_SIZE", str(100 * 1024 * 1024)))  # 100MB default
+MAX_PPTX_SIZE = int(os.getenv("MAX_PPTX_SIZE", str(50 * 1024 * 1024)))   # 50MB for PPTX
+MAX_AUDIO_SIZE = int(os.getenv("MAX_AUDIO_SIZE", str(200 * 1024 * 1024))) # 200MB for audio
+MAX_TEXT_SIZE = int(os.getenv("MAX_TEXT_SIZE", str(10 * 1024 * 1024)))    # 10MB for text
+
 def load_client_credentials() -> Dict[str, str]:
     """Load allowed client_id -> client_secret mapping from client_credentials.json
     This avoids the need for a database while still supporting credential rotation.
@@ -312,6 +319,68 @@ def validate_s3_path(path: str) -> bool:
             return False
     
     return True
+
+def validate_file_size(file: UploadFile, file_type: str = "general") -> None:
+    """
+    Validate uploaded file size against configured limits.
+    
+    Args:
+        file: The uploaded file to validate
+        file_type: Type of file for specific size limits ('pptx', 'audio', 'text', 'general')
+    
+    Raises:
+        HTTPException: If file size exceeds the limit
+    """
+    if not hasattr(file, 'size') or file.size is None:
+        # Try to get size from file content if size attribute not available
+        if hasattr(file.file, 'seek') and hasattr(file.file, 'tell'):
+            current_pos = file.file.tell()
+            file.file.seek(0, 2)  # Seek to end
+            file_size = file.file.tell()
+            file.file.seek(current_pos)  # Return to original position
+        else:
+            # If we can't determine size, allow it to proceed (will be caught later if too large)
+            logger.warning(f"Could not determine size for file: {file.filename}")
+            return
+    else:
+        file_size = file.size
+    
+    # Determine size limit based on file type
+    size_limits = {
+        "pptx": MAX_PPTX_SIZE,
+        "audio": MAX_AUDIO_SIZE,
+        "text": MAX_TEXT_SIZE,
+        "general": MAX_FILE_SIZE
+    }
+    
+    max_size = size_limits.get(file_type, MAX_FILE_SIZE)
+    
+    if file_size > max_size:
+        size_mb = max_size / (1024 * 1024)
+        actual_mb = file_size / (1024 * 1024)
+        raise HTTPException(
+            status_code=413,
+            detail=f"File '{file.filename}' is too large ({actual_mb:.1f}MB). "
+                   f"Maximum allowed size for {file_type} files is {size_mb:.1f}MB."
+        )
+    
+    logger.info(f"File size validation passed: {file.filename} ({file_size} bytes)")
+
+def get_file_type_from_filename(filename: str) -> str:
+    """Determine file type category from filename for size validation."""
+    if not filename:
+        return "general"
+    
+    extension = Path(filename).suffix.lower()
+    
+    if extension == '.pptx':
+        return "pptx"
+    elif extension in ['.txt']:
+        return "text"
+    elif extension in ['.wav', '.mp3', '.m4a', '.webm', '.mp4', '.mpga', '.mpeg', '.ogg', '.flac']:
+        return "audio"
+    else:
+        return "general"
 
 def cleanup_temp_dir(temp_dir: Path):
     """Clean up temporary directory"""
@@ -628,6 +697,9 @@ async def translate_pptx(
     for file in files:
         if not file.filename.endswith('.pptx'):
             raise HTTPException(status_code=400, detail="Only PPTX files are supported")
+        
+        # Validate file size
+        validate_file_size(file, "pptx")
 
         file_path = input_dir / file.filename
         with open(file_path, "wb") as f:
@@ -679,6 +751,9 @@ async def translate_text(
     for file in files:
         if not file.filename.endswith('.txt'):
             raise HTTPException(status_code=400, detail="Only TXT files are supported")
+        
+        # Validate file size
+        validate_file_size(file, "text")
 
         file_path = input_dir / file.filename
         with open(file_path, "wb") as f:
@@ -735,6 +810,9 @@ async def transcribe_audio(
                 status_code=400,
                 detail=f"Unsupported audio format: {file_ext}. Supported: {supported_formats}"
             )
+        
+        # Validate file size
+        validate_file_size(file, "audio")
 
         file_path = input_dir / file.filename
         with open(file_path, "wb") as f:
@@ -787,6 +865,9 @@ async def convert_pptx(
     for file in files:
         if not file.filename.endswith('.pptx'):
             raise HTTPException(status_code=400, detail="Only PPTX files are supported")
+        
+        # Validate file size
+        validate_file_size(file, "pptx")
 
         file_path = input_dir / file.filename
         with open(file_path, "wb") as f:
@@ -835,6 +916,9 @@ async def text_to_speech(
     for file in files:
         if not file.filename.endswith('.txt'):
             raise HTTPException(status_code=400, detail="Only TXT files are supported")
+        
+        # Validate file size
+        validate_file_size(file, "text")
 
         file_path = input_dir / file.filename
         with open(file_path, "wb") as f:
@@ -892,6 +976,9 @@ async def merge_video(
             raise HTTPException(status_code=400,
                               detail=f"Unsupported file format: {file_ext}. "
                                    f"Supported: {', '.join(allowed_extensions)}")
+        
+        # Validate file size (use general limit for mixed media)
+        validate_file_size(file, "general")
 
         file_path = input_dir / file.filename
         with open(file_path, "wb") as f:
@@ -909,6 +996,9 @@ async def merge_video(
             raise HTTPException(status_code=400,
                               detail=f"Unsupported audio format: {audio_ext}. "
                                    f"Supported: {', '.join(audio_extensions)}")
+        
+        # Validate audio file size
+        validate_file_size(audio_file, "audio")
 
         audio_path = input_dir / audio_file.filename
         with open(audio_path, "wb") as f:

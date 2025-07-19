@@ -228,6 +228,12 @@ ACCESS_TOKEN_EXPIRE_MINUTES=60
 # API Keys
 # (Will be populated from api_keys.json if it exists)
 
+# File Upload Limits (in bytes)
+MAX_FILE_SIZE=104857600
+MAX_PPTX_SIZE=52428800
+MAX_AUDIO_SIZE=209715200
+MAX_TEXT_SIZE=10485760
+
 # AWS Configuration (for S3 operations)
 # AWS_ACCESS_KEY_ID=your_access_key
 # AWS_SECRET_ACCESS_KEY=your_secret_key

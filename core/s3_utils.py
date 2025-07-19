@@ -4,8 +4,15 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 import boto3
+from botocore.exceptions import ClientError
 
 logger = logging.getLogger(__name__)
+
+# File size limits (same as api_server.py)
+MAX_FILE_SIZE = int(os.getenv("MAX_FILE_SIZE", str(100 * 1024 * 1024)))  # 100MB default
+MAX_PPTX_SIZE = int(os.getenv("MAX_PPTX_SIZE", str(50 * 1024 * 1024)))   # 50MB for PPTX
+MAX_AUDIO_SIZE = int(os.getenv("MAX_AUDIO_SIZE", str(200 * 1024 * 1024))) # 200MB for audio
+MAX_TEXT_SIZE = int(os.getenv("MAX_TEXT_SIZE", str(10 * 1024 * 1024)))    # 10MB for text
 
 
 class S3ClientWrapper:
@@ -48,19 +55,90 @@ class S3ClientWrapper:
     # ---------------------------------------------------------------------
     # Download helpers
     # ---------------------------------------------------------------------
-    def download_files(self, keys: List[str], dest_dir: Path) -> List[Path]:
+    def _get_file_type_from_key(self, key: str) -> str:
+        """Determine file type category from S3 key for size validation."""
+        extension = Path(key).suffix.lower()
+        
+        if extension == '.pptx':
+            return "pptx"
+        elif extension in ['.txt']:
+            return "text"
+        elif extension in ['.wav', '.mp3', '.m4a', '.webm', '.mp4', '.mpga', '.mpeg', '.ogg', '.flac']:
+            return "audio"
+        else:
+            return "general"
+    
+    def _validate_s3_file_size(self, key: str) -> None:
+        """Check S3 object size before downloading."""
+        try:
+            response = self._client.head_object(Bucket=self.bucket, Key=key)
+            file_size = response['ContentLength']
+            
+            # Determine size limit based on file type
+            file_type = self._get_file_type_from_key(key)
+            size_limits = {
+                "pptx": MAX_PPTX_SIZE,
+                "audio": MAX_AUDIO_SIZE,
+                "text": MAX_TEXT_SIZE,
+                "general": MAX_FILE_SIZE
+            }
+            
+            max_size = size_limits.get(file_type, MAX_FILE_SIZE)
+            
+            if file_size > max_size:
+                size_mb = max_size / (1024 * 1024)
+                actual_mb = file_size / (1024 * 1024)
+                raise ValueError(
+                    f"S3 file '{key}' is too large ({actual_mb:.1f}MB). "
+                    f"Maximum allowed size for {file_type} files is {size_mb:.1f}MB."
+                )
+            
+            logger.info(f"S3 file size validation passed: {key} ({file_size} bytes)")
+            
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            if error_code == 'NoSuchKey':
+                raise FileNotFoundError(f"S3 object not found: {key}")
+            elif error_code == 'Forbidden':
+                raise PermissionError(f"Access denied to S3 object: {key}")
+            else:
+                raise RuntimeError(f"Failed to check S3 object size: {e}")
+
+    def download_files(self, keys: List[str], dest_dir: Path, validate_size: bool = True) -> List[Path]:
         """Download a list of *keys* in *self.bucket* to *dest_dir*.
 
-        Returns a list of local file paths.
+        Args:
+            keys: List of S3 object keys to download
+            dest_dir: Local directory to save files
+            validate_size: Whether to validate file sizes before download
+
+        Returns:
+            List of local file paths.
         """
         dest_dir.mkdir(parents=True, exist_ok=True)
         local_paths: List[Path] = []
+        
         for key in keys:
+            # Validate file size if requested
+            if validate_size:
+                self._validate_s3_file_size(key)
+            
             filename = Path(key).name
             local_path = dest_dir / filename
             logger.info("[S3] Downloading %s -> %s", key, local_path)
-            self._client.download_file(self.bucket, key, str(local_path))
-            local_paths.append(local_path)
+            
+            try:
+                self._client.download_file(self.bucket, key, str(local_path))
+                local_paths.append(local_path)
+            except ClientError as e:
+                error_code = e.response['Error']['Code']
+                if error_code == 'NoSuchKey':
+                    raise FileNotFoundError(f"S3 object not found: {key}")
+                elif error_code == 'Forbidden':
+                    raise PermissionError(f"Access denied to S3 object: {key}")
+                else:
+                    raise RuntimeError(f"Failed to download S3 object: {e}")
+                    
         return local_paths
 
     # ------------------------------------------------------------------

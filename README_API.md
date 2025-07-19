@@ -13,6 +13,7 @@ A REST API for the Language Toolkit providing document processing, translation, 
 - **Smart Downloads**: Single files download directly, multiple files as ZIP
 - **Individual File Downloads**: Download specific files from multi-file results
 - **Asynchronous Processing**: Handle long-running tasks with progress tracking
+- **File Size Validation**: Automatic validation of upload sizes with configurable limits
 
 ## Installation
 
@@ -56,6 +57,30 @@ uvicorn api_server:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 The API will be available at `http://localhost:8000`
+
+## File Size Limits
+
+The API enforces file size limits to prevent resource exhaustion:
+
+| File Type | Default Limit | Environment Variable |
+|-----------|---------------|---------------------|
+| PPTX files | 50MB | `MAX_PPTX_SIZE` |
+| Text files | 10MB | `MAX_TEXT_SIZE` |
+| Audio files | 200MB | `MAX_AUDIO_SIZE` |
+| General files | 100MB | `MAX_FILE_SIZE` |
+
+**Error Response**: Files exceeding limits return HTTP 413 (Payload Too Large) with details:
+```json
+{
+  "detail": "File 'large.pptx' is too large (75.2MB). Maximum allowed size for pptx files is 50.0MB."
+}
+```
+
+**Configuration**: Override limits via environment variables:
+```bash
+export MAX_PPTX_SIZE=104857600  # 100MB in bytes
+export MAX_AUDIO_SIZE=524288000 # 500MB in bytes
+```
 
 ## API Documentation
 
