@@ -30,6 +30,13 @@ from pydantic import BaseModel, Field
 # Load environment variables from .env file
 load_dotenv()
 
+# Run migration if needed (before importing other modules)
+try:
+    import subprocess
+    subprocess.run([sys.executable, "migrate_secret.py", "--auto"], check=False)
+except Exception:
+    pass  # Migration script might not exist or fail, continue anyway
+
 # Import core functionality modules
 from core.config import ConfigManager
 from core.pptx_converter import PPTXConverterCore
@@ -64,6 +71,33 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+# Simple in-memory rate limiting
+from collections import defaultdict
+from datetime import datetime
+import time
+
+class RateLimiter:
+    def __init__(self, requests_per_minute: int = 60):
+        self.requests_per_minute = requests_per_minute
+        self.requests = defaultdict(list)
+    
+    def is_allowed(self, client_id: str) -> bool:
+        now = time.time()
+        minute_ago = now - 60
+        
+        # Clean old requests
+        self.requests[client_id] = [req_time for req_time in self.requests[client_id] if req_time > minute_ago]
+        
+        # Check rate limit
+        if len(self.requests[client_id]) >= self.requests_per_minute:
+            return False
+        
+        # Record this request
+        self.requests[client_id].append(now)
+        return True
+
+rate_limiter = RateLimiter(requests_per_minute=60)
 
 # Global task storage
 active_tasks: Dict[str, Dict] = {}
@@ -102,13 +136,18 @@ def load_client_credentials() -> Dict[str, str]:
 
 CLIENT_CREDENTIALS = load_client_credentials()
 
-async def verify_token(token: str = Depends(security)):
+async def verify_token(token: str = Depends(security)) -> str:
     """Validate JWT access token and return the associated client_id."""
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         client_id: Optional[str] = payload.get("sub")
         if client_id is None:
             raise HTTPException(status_code=401, detail="Invalid token payload", headers={"WWW-Authenticate": "Bearer"})
+        
+        # Apply rate limiting
+        if not rate_limiter.is_allowed(client_id):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded. Please try again later.")
+        
         return client_id
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token", headers={"WWW-Authenticate": "Bearer"})
@@ -253,6 +292,26 @@ def get_temp_dir() -> Path:
     """Create and return a temporary directory for file processing"""
     temp_dir = Path(tempfile.mkdtemp(prefix="language_toolkit_"))
     return temp_dir
+
+def validate_s3_path(path: str) -> bool:
+    """Validate S3 path to prevent directory traversal attacks"""
+    # Check for path traversal attempts
+    if ".." in path or path.startswith("/") or "\\" in path:
+        return False
+    
+    # Check for suspicious patterns
+    suspicious_patterns = ["~", "${", "$(", "`", "%", "&", "|", ";", "<", ">", "\n", "\r", "\0"]
+    for pattern in suspicious_patterns:
+        if pattern in path:
+            return False
+    
+    # Ensure path components are reasonable
+    parts = path.split("/")
+    for part in parts:
+        if len(part) > 255 or len(part) == 0:
+            return False
+    
+    return True
 
 def cleanup_temp_dir(temp_dir: Path):
     """Clean up temporary directory"""
@@ -490,7 +549,7 @@ async def run_video_merger_async(task_id: str, input_files: List[Path],
         active_tasks[task_id]["error"] = str(e)
 
 @app.get("/")
-async def root():
+async def root() -> Dict[str, Any]:
     """Root endpoint with API information"""
     return {
         "message": "Language Toolkit API",
@@ -522,7 +581,7 @@ async def root():
     }
 
 @app.get("/health")
-async def health_check():
+async def health_check() -> Dict[str, str]:
     """Health check endpoint"""
     return {"status": "healthy", "message": "API is running"}
 
@@ -1552,7 +1611,7 @@ async def run_tts_s3_async(task_id: str, input_keys: List[str], output_prefix: O
 # Background runner for direct Text -> Speech (upload to S3)
 # --------------------------------------
 
-async def run_tts_text_s3_async(task_id: str, text: str, output_key: str, voice_id: Optional[str], temp_dir: Path, professors: Optional[List[dict]] = None):
+async def run_tts_text_s3_async(task_id: str, text: str, output_key: str, voice_id: Optional[str], temp_dir: Path, professors: Optional[List[dict]] = None) -> None:
     """Generate audio from raw text and upload to S3 at *output_key*."""
 
     try:
@@ -1626,6 +1685,14 @@ async def run_tts_text_s3_async(task_id: str, text: str, output_key: str, voice_
 @app.post("/translate/pptx_s3", response_model=TaskStatus)
 async def translate_pptx_s3(request: PPTXS3Request, background_tasks: BackgroundTasks, token: str = Depends(verify_token)):
     """Translate PPTX files stored in S3 and upload results back to S3."""
+    # Validate S3 paths
+    for key in request.input_keys:
+        if not validate_s3_path(key):
+            raise HTTPException(status_code=400, detail=f"Invalid S3 path: {key}")
+    
+    if request.output_prefix and not validate_s3_path(request.output_prefix):
+        raise HTTPException(status_code=400, detail=f"Invalid S3 output prefix: {request.output_prefix}")
+    
     task_id = create_task_id()
     temp_dir = get_temp_dir()
     output_dir = temp_dir / "output"
@@ -1657,6 +1724,14 @@ async def translate_pptx_s3(request: PPTXS3Request, background_tasks: Background
 @app.post("/transcribe/audio_s3", response_model=TaskStatus)
 async def transcribe_audio_s3(request: AudioS3Request, background_tasks: BackgroundTasks, token: str = Depends(verify_token)):
     """Transcribe audio files stored in S3 and upload transcripts back to S3."""
+    # Validate S3 paths
+    for key in request.input_keys:
+        if not validate_s3_path(key):
+            raise HTTPException(status_code=400, detail=f"Invalid S3 path: {key}")
+    
+    if request.output_prefix and not validate_s3_path(request.output_prefix):
+        raise HTTPException(status_code=400, detail=f"Invalid S3 output prefix: {request.output_prefix}")
+    
     task_id = create_task_id()
     temp_dir = get_temp_dir()
     output_dir = temp_dir / "output"
@@ -1695,6 +1770,14 @@ async def translate_text_s3(
     token: str = Depends(verify_token)
 ):
     """Translate text files stored in S3 and upload results back to S3."""
+    # Validate S3 paths
+    for key in request.input_keys:
+        if not validate_s3_path(key):
+            raise HTTPException(status_code=400, detail=f"Invalid S3 path: {key}")
+    
+    if request.output_prefix and not validate_s3_path(request.output_prefix):
+        raise HTTPException(status_code=400, detail=f"Invalid S3 output prefix: {request.output_prefix}")
+    
     task_id = create_task_id()
     temp_dir = get_temp_dir()
     output_dir = temp_dir / "output"
@@ -1734,6 +1817,9 @@ async def translate_course_s3(
     token: str = Depends(verify_token)
 ):
     """Translate all PPTX & TXT for a course in S3 to multiple target languages."""
+    # Validate output prefix if provided
+    if request.output_prefix and not validate_s3_path(request.output_prefix):
+        raise HTTPException(status_code=400, detail=f"Invalid S3 output prefix: {request.output_prefix}")
 
     task_id = create_task_id()
     temp_dir = get_temp_dir()
@@ -1855,7 +1941,7 @@ class CourseVideoS3Request(BaseModel):
 # --------------------------------------
 # Background runner for Course Video Generation from S3
 # --------------------------------------
-async def run_course_video_s3_async(task_id: str, course_id: str, language: str, output_key: Optional[str], professors: Optional[List[dict]] = None):
+async def run_course_video_s3_async(task_id: str, course_id: str, language: str, output_key: Optional[str], professors: Optional[List[dict]] = None) -> None:
     """Generate a complete course video by converting PPTX→PNG and merging with existing MP3 files."""
     temp_root = None
     try:

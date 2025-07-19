@@ -1,3 +1,4 @@
+import sys
 import tkinter as tk
 import convertapi
 from tkinter import ttk, filedialog, messagebox
@@ -24,6 +25,12 @@ from pptx.enum.dml import MSO_THEME_COLOR, MSO_COLOR_TYPE
 from PIL import Image
 from core.tool_descriptions import get_short_description, get_tool_info, get_quick_tips
 
+# Run migration if needed (before other initializations)
+try:
+    subprocess.run([sys.executable, "migrate_secret.py", "--auto"], check=False)
+except Exception:
+    pass  # Migration script might not exist or fail, continue anyway
+
 
 # --- Constants ---
 SUPPORTED_LANGUAGES_FILE = "supported_languages.json"
@@ -31,6 +38,9 @@ API_KEYS_FILE = "api_keys.json"
 
 # --- Setup Logging ---
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+# Import the updated ConfigManager from core
+from core.config import ConfigManager as CoreConfigManager
 
 class ConfigManager:
     """Manages configuration files for the application."""
@@ -41,7 +51,10 @@ class ConfigManager:
         self.api_keys_file = self.base_path / api_keys_file
 
         self.languages = self.load_json(self.languages_file)
-        self.api_keys = self.load_json(self.api_keys_file)
+        
+        # Use core ConfigManager for API keys to support .env
+        self.core_config = CoreConfigManager(use_project_api_keys=True)
+        self.api_keys = self.core_config.get_api_keys()
 
     def load_json(self, file_path: Path):
         """Loads JSON data from a file."""

@@ -12,3 +12,5 @@ elevenlabs_voices.json
 api-test-app/node_modules
 auth_tokens.json
 data/*
+# Security files
+client_credentials.json
