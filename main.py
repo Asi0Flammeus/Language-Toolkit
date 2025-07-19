@@ -92,6 +92,9 @@ class ToolBase:
         # Add selection mode variable
         self.selection_mode = tk.StringVar(value="file")  # "file" or "folder"
         
+        # Add output checking option
+        self.check_output_exists = tk.BooleanVar(value=True)  # Default to checking if output exists
+        
         # Define supported extensions for the tool (to be overridden by child classes)
         self.supported_extensions = set()
         
@@ -290,6 +293,25 @@ class ToolBase:
     def process_file(self, input_file: Path, output_dir: Path):
         """Abstract method for processing a single file."""
         raise NotImplementedError("Subclasses must implement process_file()")
+    
+    def should_skip_file(self, input_file: Path, output_dir: Path, output_extension: str = None) -> bool:
+        """Check if processing should be skipped based on existing output."""
+        if not self.check_output_exists.get():
+            return False
+        
+        # If no specific extension provided, cannot check
+        if not output_extension:
+            return False
+            
+        # Construct expected output filename
+        output_filename = input_file.stem + output_extension
+        output_file = output_dir / output_filename
+        
+        if output_file.exists():
+            self.send_progress_update(f"Skipping {input_file.name} - output already exists: {output_file.name}")
+            return True
+        
+        return False
 
     def handle_drop(self, event):
         """Handles drag and drop events."""
@@ -476,6 +498,10 @@ class TextToSpeechTool(ToolBase):
     def process_file(self, input_file: Path, output_dir: Path):
         """Processes a single text file for TTS conversion."""
         try:
+            # Check if should skip
+            if self.should_skip_file(input_file, output_dir, '.mp3'):
+                return
+            
             self.send_progress_update(f"Processing {input_file.name}...")
             
             # Check for interruption
@@ -692,6 +718,12 @@ class PPTXTranslationTool(ToolBase, LanguageSelectionMixin):
         """Processes a single PPTX file."""
         if input_file.suffix.lower() != ".pptx":
             self.send_progress_update(f"Skipping non-PPTX file: {input_file}")
+            return
+        
+        # Check if should skip - PPTX files append target language before extension
+        output_filename = f"{input_file.stem}_{self.target_lang.get()}{input_file.suffix}"
+        if self.check_output_exists.get() and (output_dir / output_filename).exists():
+            self.send_progress_update(f"Skipping {input_file.name} - output already exists: {output_filename}")
             return
 
         try:
@@ -932,6 +964,12 @@ class AudioTranscriptionTool(ToolBase):
     def process_file(self, input_file: Path, output_dir: Path):
         """Processes a single audio file."""
         try:
+            # Check if should skip - audio transcripts append _transcript.txt
+            output_filename = f"{input_file.stem}_transcript.txt"
+            if self.check_output_exists.get() and (output_dir / output_filename).exists():
+                self.send_progress_update(f"Skipping {input_file.name} - output already exists: {output_filename}")
+                return
+                
             self.send_progress_update(f"Transcribing {input_file.name}...")
             transcript = self.transcribe_audio(input_file, output_dir)
             self.save_transcript(transcript, input_file, output_dir)
@@ -1059,6 +1097,12 @@ class TextTranslationTool(ToolBase, LanguageSelectionMixin):
     def process_file(self, input_file: Path, output_dir: Path):
         """Processes a single text file."""
         try:
+            # Check if should skip - text files append target language before extension
+            output_filename = f"{input_file.stem}_{self.target_lang.get()}{input_file.suffix}"
+            if self.check_output_exists.get() and (output_dir / output_filename).exists():
+                self.send_progress_update(f"Skipping {input_file.name} - output already exists: {output_filename}")
+                return
+                
             self.send_progress_update(f"Translating {input_file.name}...")
             
             # Check for interruption
@@ -1066,7 +1110,7 @@ class TextTranslationTool(ToolBase, LanguageSelectionMixin):
                 raise InterruptedError("Processing stopped by user")
 
             # Create output file path
-            output_file = output_dir / f"{input_file.stem}_{self.target_lang.get()}{input_file.suffix}"
+            output_file = output_dir / output_filename
 
             # Read source file
             with open(input_file, 'r', encoding='utf-8') as f:
@@ -1203,6 +1247,26 @@ class PPTXtoPDFTool(ToolBase):
         """
         try:
             output_format = self.output_format.get()
+            
+            # Check if should skip based on output format
+            if self.check_output_exists.get():
+                skip = False
+                if output_format == 'pdf':
+                    output_file = output_dir / f"{input_file.stem}.pdf"
+                    if output_file.exists():
+                        self.send_progress_update(f"Skipping {input_file.name} - output already exists: {output_file.name}")
+                        skip = True
+                elif output_format in ['png', 'webp']:
+                    # Check if first slide exists (00 file)
+                    ext = '.png' if output_format == 'png' else '.webp'
+                    first_slide = output_dir / f"{input_file.stem}_00{ext}"
+                    if first_slide.exists():
+                        self.send_progress_update(f"Skipping {input_file.name} - output already exists: {first_slide.name}")
+                        skip = True
+                
+                if skip:
+                    return
+            
             self.send_progress_update(f"Converting {input_file.name} to {output_format.upper()}...")
 
             # Ensure output directory exists
@@ -1515,6 +1579,11 @@ class VideoMergeTool(ToolBase):
         Handles adding silence between clips.
         """
         try:
+            # Check if should skip
+            if self.check_output_exists.get() and output_file.exists():
+                self.send_progress_update(f"Skipping video creation - output already exists: {output_file.name}")
+                return
+                
             # Create a temporary directory for intermediate files
             temp_dir = output_file.parent / "temp_video_files"
             temp_dir.mkdir(exist_ok=True)
@@ -1857,6 +1926,290 @@ class SequentialProcessingTool(ToolBase, LanguageSelectionMixin):
             logging.exception("Error during multiple language processing")
 
 
+class RewardEvaluatorTool(ToolBase):
+    """
+    Unified reward evaluator for both PPTX and TXT files.
+    Supports different reward modes: Image PPTX, Video PPTX, and TXT.
+    """
+
+    def __init__(self, master, config_manager, progress_queue):
+        super().__init__(master, config_manager, progress_queue)
+        self.supported_extensions = {'.pptx', '.ppt', '.txt'}
+        
+        # Additional variables specific to this tool
+        self.reward_mode = tk.StringVar(value="image")  # image, video, txt
+        self.target_language = tk.StringVar(value="en")
+        self.results = []
+        
+        # Initialize the unified evaluator
+        from core.unified_reward_evaluator import UnifiedRewardEvaluator
+        self.evaluator = UnifiedRewardEvaluator()
+
+    def create_specific_controls(self, parent_frame):
+        """Creates UI elements specific to this tool."""
+        
+        # Language selection
+        lang_frame = ttk.LabelFrame(parent_frame, text="Language Selection")
+        lang_frame.pack(fill='x', padx=5, pady=5)
+        
+        # Target language
+        target_label = ttk.Label(lang_frame, text="Target Language:")
+        target_label.pack(side=tk.LEFT, padx=5)
+        
+        languages = list(self.evaluator.language_factors.keys())
+        target_combo = ttk.Combobox(lang_frame, textvariable=self.target_language, 
+                                   values=languages, state="readonly")
+        target_combo.pack(side=tk.LEFT, padx=5)
+        
+        # Reward mode selection
+        mode_frame = ttk.LabelFrame(parent_frame, text="Reward Mode")
+        mode_frame.pack(fill='x', padx=5, pady=5)
+        
+        ttk.Radiobutton(mode_frame, text="Image PPTX (factor 1.5)", 
+                       variable=self.reward_mode, 
+                       value="image").pack(side=tk.LEFT, padx=10)
+        ttk.Radiobutton(mode_frame, text="Video PPTX (factor 1.0)", 
+                       variable=self.reward_mode, 
+                       value="video").pack(side=tk.LEFT, padx=10)
+        ttk.Radiobutton(mode_frame, text="TXT Files", 
+                       variable=self.reward_mode, 
+                       value="txt").pack(side=tk.LEFT, padx=10)
+        
+        # Results display frame
+        results_frame = ttk.LabelFrame(parent_frame, text="Results")
+        results_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        # Results text widget with scrollbar
+        text_frame = ttk.Frame(results_frame)
+        text_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        self.results_text = tk.Text(text_frame, height=10, wrap=tk.WORD)
+        results_scrollbar = ttk.Scrollbar(text_frame, orient="vertical", 
+                                        command=self.results_text.yview)
+        self.results_text.configure(yscrollcommand=results_scrollbar.set)
+        
+        self.results_text.pack(side=tk.LEFT, fill='both', expand=True)
+        results_scrollbar.pack(side=tk.RIGHT, fill='y')
+        
+        # CSV export button
+        export_frame = ttk.Frame(parent_frame)
+        export_frame.pack(fill='x', padx=5, pady=5)
+        
+        self.export_button = ttk.Button(export_frame, text="Export Results to CSV", 
+                                       command=self.export_to_csv, state=tk.DISABLED)
+        self.export_button.pack(side=tk.LEFT, padx=5)
+
+    def before_processing(self):
+        """Setup before processing starts."""
+        self.results = []
+        self.results_text.configure(state='normal')
+        self.results_text.delete(1.0, tk.END)
+        self.results_text.configure(state='disabled')
+        self.export_button.configure(state=tk.DISABLED)
+
+    def process_file(self, input_file: Path, output_dir: Path):
+        """Process a single file for reward evaluation."""
+        try:
+            self.send_progress_update(f"Evaluating {input_file.name}...")
+            
+            # Evaluate the file
+            result = self.evaluator.evaluate_file(
+                str(input_file), 
+                self.target_language.get(),
+                self.reward_mode.get()
+            )
+            
+            self.results.append(result)
+            
+            # Display results
+            if 'error' in result:
+                self.send_progress_update(f"ERROR: {result['error']}")
+                self.update_results_display()
+                return False
+            else:
+                # Handle different result formats
+                if self.reward_mode.get() == 'txt':
+                    reward_euros = result['reward_euros']
+                    word_count = result['word_count']
+                    self.send_progress_update(f"✅ {input_file.name}")
+                    self.send_progress_update(f"   Reward: €{reward_euros:.4f}")
+                    self.send_progress_update(f"   Words: {word_count}")
+                else:
+                    # PPTX mode
+                    total_reward = result['total_reward']
+                    total_slides = result['total_slides']
+                    total_text_boxes = result['total_text_boxes']
+                    total_words = result['total_words']
+                    self.send_progress_update(f"✅ {input_file.name}")
+                    self.send_progress_update(f"   Reward: €{total_reward:.4f}")
+                    self.send_progress_update(f"   Slides: {total_slides}, Text boxes: {total_text_boxes}, Words: {total_words}")
+                
+                self.update_results_display()
+                return True
+                
+        except Exception as e:
+            error_msg = f"Failed to evaluate {input_file.name}: {str(e)}"
+            self.send_progress_update(f"ERROR: {error_msg}")
+            logging.error(error_msg, exc_info=True)
+            return False
+
+    def update_results_display(self):
+        """Update the results display widget."""
+        self.results_text.configure(state='normal')
+        self.results_text.delete(1.0, tk.END)
+        
+        if not self.results:
+            self.results_text.insert(tk.END, "No results yet...")
+            self.results_text.configure(state='disabled')
+            return
+        
+        # Get summary stats
+        summary = self.evaluator.get_summary_stats(self.results)
+        
+        if 'error' in summary:
+            self.results_text.insert(tk.END, f"Error generating summary: {summary['error']}\n")
+            self.results_text.configure(state='disabled')
+            return
+        
+        # Header
+        file_type = summary.get('file_type', 'Unknown')
+        self.results_text.insert(tk.END, f"{file_type} Reward Evaluation Results\n")
+        self.results_text.insert(tk.END, f"="*50 + "\n\n")
+        self.results_text.insert(tk.END, f"Total Files: {summary['total_files']}\n")
+        
+        if file_type == 'PPTX':
+            self.results_text.insert(tk.END, f"Total Slides: {summary['total_slides']}\n")
+            self.results_text.insert(tk.END, f"Total Text Boxes: {summary['total_text_boxes']}\n")
+            self.results_text.insert(tk.END, f"Total Words: {summary['total_words']}\n")
+        else:
+            self.results_text.insert(tk.END, f"Total Words: {summary['total_words']}\n")
+            self.results_text.insert(tk.END, f"Avg Words/File: {summary['average_words_per_file']}\n")
+        
+        self.results_text.insert(tk.END, f"Total Reward: €{summary['total_reward_euros']:.4f}\n")
+        self.results_text.insert(tk.END, f"Avg Reward/File: €{summary['average_reward_per_file']:.4f}\n\n")
+        
+        # Individual results
+        for result in self.results:
+            if self.reward_mode.get() == 'txt':
+                filename = result.get('file_path', 'Unknown')
+                if filename != 'Unknown':
+                    filename = Path(filename).name
+                
+                if 'error' in result:
+                    self.results_text.insert(tk.END, f"❌ {filename}: {result['error']}\n")
+                else:
+                    reward = result.get('reward_euros', 0)
+                    words = result.get('word_count', 0)
+                    difficulty = result.get('difficulty_factor', 1.0)
+                    target_lang = result.get('target_language', 'unknown')
+                    
+                    self.results_text.insert(tk.END, f"✅ {filename}\n")
+                    self.results_text.insert(tk.END, f"   Reward: €{reward:.4f}\n")
+                    self.results_text.insert(tk.END, f"   Words: {words}\n")
+                    self.results_text.insert(tk.END, f"   Target Language: {target_lang}\n")
+                    self.results_text.insert(tk.END, f"   Difficulty Factor: {difficulty}\n\n")
+            else:
+                # PPTX mode
+                filename = result.get('filename', 'Unknown')
+                if 'error' in result:
+                    self.results_text.insert(tk.END, f"❌ {filename}: {result['error']}\n")
+                else:
+                    reward = result.get('total_reward', 0)
+                    slides = result.get('total_slides', 0)
+                    text_boxes = result.get('total_text_boxes', 0)
+                    words = result.get('total_words', 0)
+                    mode = result.get('mode', 'unknown')
+                    
+                    self.results_text.insert(tk.END, f"✅ {filename}\n")
+                    self.results_text.insert(tk.END, f"   Reward: €{reward:.4f}\n")
+                    self.results_text.insert(tk.END, f"   Slides: {slides}, Text boxes: {text_boxes}, Words: {words}\n")
+                    self.results_text.insert(tk.END, f"   Mode: {mode}\n\n")
+        
+        self.results_text.configure(state='disabled')
+        
+        # Enable export button if we have results
+        if self.results:
+            self.export_button.configure(state=tk.NORMAL)
+
+    def export_to_csv(self):
+        """Export results to CSV file."""
+        if not self.results:
+            messagebox.showwarning("No Results", "No results to export.")
+            return
+        
+        # Ask user for CSV file location
+        csv_file = filedialog.asksaveasfilename(
+            title="Save Results as CSV",
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+        )
+        
+        if csv_file:
+            try:
+                import csv
+                with open(csv_file, 'w', newline='', encoding='utf-8') as f:
+                    writer = csv.writer(f)
+                    
+                    if self.reward_mode.get() == 'txt':
+                        # TXT CSV format
+                        writer.writerow(['File Path', 'Word Count', 'Target Language', 
+                                       'Difficulty Factor', 'Euros per Word', 'Reward (Euros)', 'Reward (Cents)', 'Error'])
+                        
+                        for result in self.results:
+                            if 'error' in result:
+                                writer.writerow([result.get('file_path', ''), '', '', '', '', '', '', result['error']])
+                            else:
+                                writer.writerow([
+                                    result.get('file_path', ''),
+                                    result.get('word_count', 0),
+                                    result.get('target_language', ''),
+                                    result.get('difficulty_factor', 0),
+                                    result.get('euros_per_word', 0),
+                                    result.get('reward_euros', 0),
+                                    result.get('reward_cents', 0),
+                                    ''
+                                ])
+                    else:
+                        # PPTX CSV format
+                        writer.writerow(['Filename', 'Total Slides', 'Total Text Boxes', 'Total Words', 
+                                       'Mode', 'Total Reward (Euros)', 'Language', 'Error'])
+                        
+                        for result in self.results:
+                            if 'error' in result:
+                                writer.writerow([result.get('filename', ''), '', '', '', '', '', '', result['error']])
+                            else:
+                                writer.writerow([
+                                    result.get('filename', ''),
+                                    result.get('total_slides', 0),
+                                    result.get('total_text_boxes', 0),
+                                    result.get('total_words', 0),
+                                    result.get('mode', ''),
+                                    result.get('total_reward', 0),
+                                    result.get('language', ''),
+                                    ''
+                                ])
+                
+                self.send_progress_update(f"Results exported to: {csv_file}")
+                messagebox.showinfo("Export Successful", f"Results exported to:\n{csv_file}")
+            except Exception as e:
+                error_msg = f"Failed to export CSV: {str(e)}"
+                self.send_progress_update(f"ERROR: {error_msg}")
+                messagebox.showerror("Export Error", error_msg)
+
+    def after_processing(self):
+        """Cleanup after processing is complete."""
+        self.send_progress_update("Reward evaluation completed.")
+        self.update_results_display()
+
+    def get_all_files_recursive(self, directory: Path):
+        """Get all supported files from directory recursively."""
+        files = []
+        supported_exts = self.evaluator.get_supported_extensions(self.reward_mode.get())
+        for ext in supported_exts:
+            files.extend(directory.rglob(f"*{ext}"))
+        return files
+
+
 class MainApp(TkinterDnD.Tk):
     """Main application class."""
 
@@ -1913,6 +2266,7 @@ class MainApp(TkinterDnD.Tk):
         self.text_to_speech_tool = self.create_tool_tab("Text to Speech", TextToSpeechTool)  
         self.video_merge_tool = self.create_tool_tab("Video Merge", VideoMergeTool)
         self.sequential_tool = self.create_tool_tab("Sequential Processing", SequentialProcessingTool)
+        self.reward_evaluator_tool = self.create_tool_tab("Reward Evaluator", RewardEvaluatorTool)
 
         # Bottom pane: Progress Text Area
         self.bottom_frame = ttk.Frame(self.main_paned)
@@ -1945,7 +2299,8 @@ class MainApp(TkinterDnD.Tk):
             PPTXtoPDFTool: "pptx_to_pdf_png",
             TextToSpeechTool: "text_to_speech",
             VideoMergeTool: "video_merge",
-            SequentialProcessingTool: "sequential_processing"
+            SequentialProcessingTool: "sequential_processing",
+            RewardEvaluatorTool: "reward_evaluator"
         }
         
         # Get tool description key
@@ -2120,6 +2475,17 @@ class MainApp(TkinterDnD.Tk):
         tool.output_path_display = tk.Text(output_frame, height=1, width=50)
         tool.output_path_display.pack(side=tk.LEFT, padx=5, fill='x', expand=True)
         tool.output_path_display.configure(state='disabled')
+
+        # Output checking option
+        check_frame = ttk.Frame(frame)
+        check_frame.pack(pady=5, fill='x', padx=5)
+        
+        check_output_checkbox = ttk.Checkbutton(
+            check_frame,
+            text="Skip processing if output already exists",
+            variable=tool.check_output_exists
+        )
+        check_output_checkbox.pack(side=tk.LEFT, padx=5)
 
         # Button Frame
         button_frame = ttk.Frame(frame)

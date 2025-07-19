@@ -60,6 +60,13 @@ def get_tool_descriptions():
             "description": "Run multiple tools in sequence for complete workflow automation",
             "details": "Chains together translation, conversion, and audio generation for end-to-end processing",
             "use_case": "Automates complex workflows like creating multilingual video presentations"
+        },
+        
+        "reward_evaluator": {
+            "title": "Reward Evaluator",
+            "description": "Calculate proofreading rewards for presentations and text documents",
+            "details": "Unified tool that evaluates PowerPoint presentations and text files to determine proofreading compensation based on language difficulty and content type",
+            "use_case": "Perfect for calculating fair payment for proofreading services across different document types"
         }
     }
 
@@ -104,6 +111,11 @@ def get_tool_requirements():
         "sequential_processing": {
             "api_required": "Multiple",
             "api_description": "Requires API keys for the selected tools in the sequence"
+        },
+        
+        "reward_evaluator": {
+            "api_required": None,
+            "api_description": "No API key required (uses local document analysis)"
         }
     }
 
@@ -155,6 +167,12 @@ def get_supported_formats():
             "input": ["Various"],
             "output": ["Various"],
             "notes": "Depends on selected tools in the sequence"
+        },
+        
+        "reward_evaluator": {
+            "input": [".pptx", ".ppt", ".txt"],
+            "output": [".csv"],
+            "notes": "Analyzes PowerPoint and text files with configurable reward modes"
         }
     }
 
@@ -206,6 +224,12 @@ def get_quick_tips():
             "Configure all required API keys before starting",
             "Review the processing order before running",
             "Total time depends on all selected operations"
+        ],
+        
+        "reward_evaluator": [
+            "Select the target language for accurate difficulty factors",
+            "Choose reward mode: Image PPTX (1.5x), Video PPTX (1.0x), or TXT files",
+            "Use recursive processing for multiple files in folders"
         ]
     }
 
