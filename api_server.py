@@ -25,7 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 
 # Load environment variables from .env file
 load_dotenv()
@@ -119,6 +119,43 @@ MAX_FILE_SIZE = int(os.getenv("MAX_FILE_SIZE", str(100 * 1024 * 1024)))  # 100MB
 MAX_PPTX_SIZE = int(os.getenv("MAX_PPTX_SIZE", str(50 * 1024 * 1024)))   # 50MB for PPTX
 MAX_AUDIO_SIZE = int(os.getenv("MAX_AUDIO_SIZE", str(200 * 1024 * 1024))) # 200MB for audio
 MAX_TEXT_SIZE = int(os.getenv("MAX_TEXT_SIZE", str(10 * 1024 * 1024)))    # 10MB for text
+
+# Validation constants
+# -----------------------------
+# Load supported language codes from configuration file
+def load_supported_languages():
+    """Load supported languages from supported_languages.json"""
+    try:
+        with open("supported_languages.json", "r") as f:
+            languages = json.load(f)
+        source_langs = set(languages.get("source_languages", {}).keys())
+        target_langs = set(languages.get("target_languages", {}).keys())
+        return source_langs, target_langs
+    except Exception as e:
+        logger.error(f"Failed to load supported_languages.json: {e}")
+        # Fallback to default languages if file not found
+        source_langs = {
+            "bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr", "hu", "id", 
+            "it", "ja", "lt", "lv", "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", 
+            "tr", "uk", "zh"
+        }
+        target_langs = {
+            "bg", "cs", "da", "de", "el", "en-gb", "en-us", "es", "et", "fi", "fr", 
+            "hu", "id", "it", "ja", "ko", "lt", "lv", "nl", "pl", "pt-br", "pt-pt", 
+            "ro", "ru", "sk", "sl", "sv", "tr", "uk", "zh"
+        }
+        return source_langs, target_langs
+
+# Load language constants
+VALID_SOURCE_LANGUAGES, VALID_TARGET_LANGUAGES = load_supported_languages()
+
+# Supported file extensions
+SUPPORTED_PPTX_EXTENSIONS = {".pptx"}
+SUPPORTED_TEXT_EXTENSIONS = {".txt"}
+SUPPORTED_AUDIO_EXTENSIONS = {".wav", ".mp3", ".m4a", ".webm", ".mp4", ".mpga", ".mpeg", ".ogg", ".flac"}
+SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".gif"}
+SUPPORTED_VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
+SUPPORTED_CONVERSION_FORMATS = {"pdf", "png", "webp"}
 
 def load_client_credentials() -> Dict[str, str]:
     """Load allowed client_id -> client_secret mapping from client_credentials.json
@@ -270,6 +307,13 @@ class MultiTranslationRequest(BaseModel):
 class ConversionRequest(BaseModel):
     """PPTX conversion request model"""
     output_format: str = Field(..., description="Output format: 'pdf' or 'png'")
+    
+    @validator('output_format')
+    def validate_output_format_field(cls, v):
+        """Validate output format against allowed formats"""
+        allowed_formats = {'pdf', 'png', 'webp'}
+        validate_output_format(v, allowed_formats)
+        return v.lower().strip()
 
 class TaskProgressQueue:
     """Thread-safe progress queue for tasks"""
@@ -381,6 +425,105 @@ def get_file_type_from_filename(filename: str) -> str:
         return "audio"
     else:
         return "general"
+
+def validate_language_code(language: str, is_target: bool = False) -> None:
+    """
+    Validate language code against supported languages.
+    
+    Args:
+        language: Language code to validate
+        is_target: Whether this is a target language (allows more variants)
+    
+    Raises:
+        HTTPException: If language code is invalid
+    """
+    if not language or not isinstance(language, str):
+        raise HTTPException(
+            status_code=400,
+            detail="Language code must be a non-empty string"
+        )
+    
+    language = language.lower().strip()
+    valid_languages = VALID_TARGET_LANGUAGES if is_target else VALID_SOURCE_LANGUAGES
+    
+    if language not in valid_languages:
+        lang_type = "target" if is_target else "source"
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid {lang_type} language code: '{language}'. "
+                   f"Supported codes: {', '.join(sorted(valid_languages))}"
+        )
+
+def validate_file_extension(filename: str, allowed_extensions: set) -> None:
+    """
+    Validate file extension against allowed extensions.
+    
+    Args:
+        filename: Name of the file to validate
+        allowed_extensions: Set of allowed extensions (with dots)
+    
+    Raises:
+        HTTPException: If file extension is not allowed
+    """
+    if not filename:
+        raise HTTPException(status_code=400, detail="Filename cannot be empty")
+    
+    extension = Path(filename).suffix.lower()
+    if extension not in allowed_extensions:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file format: '{extension}'. "
+                   f"Supported formats: {', '.join(sorted(allowed_extensions))}"
+        )
+
+def validate_output_format(format_str: str, allowed_formats: set) -> None:
+    """
+    Validate output format against allowed formats.
+    
+    Args:
+        format_str: Format string to validate
+        allowed_formats: Set of allowed format strings
+    
+    Raises:
+        HTTPException: If format is not allowed
+    """
+    if not format_str or not isinstance(format_str, str):
+        raise HTTPException(status_code=400, detail="Output format must be a non-empty string")
+    
+    format_str = format_str.lower().strip()
+    if format_str not in allowed_formats:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid output format: '{format_str}'. "
+                   f"Supported formats: {', '.join(sorted(allowed_formats))}"
+        )
+
+def validate_duration_per_slide(duration: Optional[float]) -> float:
+    """
+    Validate duration per slide parameter.
+    
+    Args:
+        duration: Duration value to validate
+        
+    Returns:
+        Validated duration value
+    
+    Raises:
+        HTTPException: If duration is invalid
+    """
+    if duration is None:
+        return 3.0  # Default value
+    
+    if not isinstance(duration, (int, float)):
+        raise HTTPException(status_code=400, detail="Duration must be a number")
+    
+    if duration <= 0:
+        raise HTTPException(status_code=400, detail="Duration must be greater than 0")
+    
+    if duration > 60:
+        raise HTTPException(status_code=400, detail="Duration must be 60 seconds or less")
+    
+    return float(duration)
 
 def cleanup_temp_dir(temp_dir: Path):
     """Clean up temporary directory"""
@@ -685,6 +828,13 @@ async def translate_pptx(
     token: str = Depends(verify_token)
 ):
     """Translate PPTX files from source to target language"""
+    # Validate parameters
+    validate_language_code(source_lang, is_target=False)
+    validate_language_code(target_lang, is_target=True)
+    
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided")
+    
     task_id = create_task_id()
     temp_dir = get_temp_dir()
     input_dir = temp_dir / "input"
@@ -695,8 +845,8 @@ async def translate_pptx(
     # Save uploaded files
     input_files = []
     for file in files:
-        if not file.filename.endswith('.pptx'):
-            raise HTTPException(status_code=400, detail="Only PPTX files are supported")
+        # Validate file extension
+        validate_file_extension(file.filename, SUPPORTED_PPTX_EXTENSIONS)
         
         # Validate file size
         validate_file_size(file, "pptx")
@@ -739,6 +889,13 @@ async def translate_text(
     token: str = Depends(verify_token)
 ):
     """Translate text files from source to target language"""
+    # Validate parameters
+    validate_language_code(source_lang, is_target=False)
+    validate_language_code(target_lang, is_target=True)
+    
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided")
+    
     task_id = create_task_id()
     temp_dir = get_temp_dir()
     input_dir = temp_dir / "input"
@@ -749,8 +906,8 @@ async def translate_text(
     # Save uploaded files
     input_files = []
     for file in files:
-        if not file.filename.endswith('.txt'):
-            raise HTTPException(status_code=400, detail="Only TXT files are supported")
+        # Validate file extension
+        validate_file_extension(file.filename, SUPPORTED_TEXT_EXTENSIONS)
         
         # Validate file size
         validate_file_size(file, "text")
@@ -792,6 +949,9 @@ async def transcribe_audio(
     token: str = Depends(verify_token)
 ):
     """Transcribe audio files to text"""
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided")
+    
     task_id = create_task_id()
     temp_dir = get_temp_dir()
     input_dir = temp_dir / "input"
@@ -801,15 +961,10 @@ async def transcribe_audio(
 
     # Save uploaded files
     input_files = []
-    supported_formats = {'.wav', '.mp3', '.m4a', '.webm', '.mp4', '.mpga', '.mpeg'}
 
     for file in files:
-        file_ext = Path(file.filename).suffix.lower()
-        if file_ext not in supported_formats:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported audio format: {file_ext}. Supported: {supported_formats}"
-            )
+        # Validate file extension
+        validate_file_extension(file.filename, SUPPORTED_AUDIO_EXTENSIONS)
         
         # Validate file size
         validate_file_size(file, "audio")
@@ -850,8 +1005,11 @@ async def convert_pptx(
     token: str = Depends(verify_token)
 ):
     """Convert PPTX files to PDF, PNG, or WEBP"""
-    if output_format not in ["pdf", "png", "webp"]:
-        raise HTTPException(status_code=400, detail="Output format must be 'pdf', 'png', or 'webp'")
+    # Validate parameters
+    validate_output_format(output_format, SUPPORTED_CONVERSION_FORMATS)
+    
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided")
 
     task_id = create_task_id()
     temp_dir = get_temp_dir()
@@ -863,8 +1021,8 @@ async def convert_pptx(
     # Save uploaded files
     input_files = []
     for file in files:
-        if not file.filename.endswith('.pptx'):
-            raise HTTPException(status_code=400, detail="Only PPTX files are supported")
+        # Validate file extension
+        validate_file_extension(file.filename, SUPPORTED_PPTX_EXTENSIONS)
         
         # Validate file size
         validate_file_size(file, "pptx")
@@ -914,8 +1072,8 @@ async def text_to_speech(
     # Save uploaded files
     input_files = []
     for file in files:
-        if not file.filename.endswith('.txt'):
-            raise HTTPException(status_code=400, detail="Only TXT files are supported")
+        # Validate file extension
+        validate_file_extension(file.filename, ['.txt'])
         
         # Validate file size
         validate_file_size(file, "text")
@@ -967,15 +1125,10 @@ async def merge_video(
     # Save uploaded files
     input_files = []
     for file in files:
-        # Accept both image and video files
-        allowed_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.gif',
-                            '.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.wmv'}
-        file_ext = Path(file.filename).suffix.lower()
-
-        if file_ext not in allowed_extensions:
-            raise HTTPException(status_code=400,
-                              detail=f"Unsupported file format: {file_ext}. "
-                                   f"Supported: {', '.join(allowed_extensions)}")
+        # Validate file extension - accept both image and video files
+        allowed_extensions = ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.gif',
+                            '.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.wmv']
+        validate_file_extension(file.filename, allowed_extensions)
         
         # Validate file size (use general limit for mixed media)
         validate_file_size(file, "general")
@@ -989,13 +1142,9 @@ async def merge_video(
     # Save audio file if provided
     audio_path = None
     if audio_file and audio_file.filename:
-        audio_extensions = {'.mp3', '.wav', '.aac', '.m4a', '.flac', '.ogg'}
-        audio_ext = Path(audio_file.filename).suffix.lower()
-
-        if audio_ext not in audio_extensions:
-            raise HTTPException(status_code=400,
-                              detail=f"Unsupported audio format: {audio_ext}. "
-                                   f"Supported: {', '.join(audio_extensions)}")
+        # Validate audio file extension
+        audio_extensions = ['.mp3', '.wav', '.aac', '.m4a', '.flac', '.ogg']
+        validate_file_extension(audio_file.filename, audio_extensions)
         
         # Validate audio file size
         validate_file_size(audio_file, "audio")
@@ -1203,12 +1352,42 @@ class PPTXS3Request(BaseModel):
     output_prefix: Optional[str] = Field(None, description="Destination S3 prefix for translated files")
     source_lang: str = Field(..., description="Source language code (e.g., 'en')")
     target_lang: str = Field(..., description="Target language code (e.g., 'fr')")
+    
+    @validator('input_keys')
+    def validate_input_keys(cls, v):
+        if not v or len(v) == 0:
+            raise ValueError("input_keys cannot be empty")
+        for key in v:
+            if not key or not isinstance(key, str):
+                raise ValueError("Each input key must be a non-empty string")
+        return v
+    
+    @validator('source_lang')
+    def validate_source_lang(cls, v):
+        if v.lower().strip() not in VALID_SOURCE_LANGUAGES:
+            raise ValueError(f"Invalid source language: {v}. Supported: {', '.join(sorted(VALID_SOURCE_LANGUAGES))}")
+        return v.lower().strip()
+    
+    @validator('target_lang')
+    def validate_target_lang(cls, v):
+        if v.lower().strip() not in VALID_TARGET_LANGUAGES:
+            raise ValueError(f"Invalid target language: {v}. Supported: {', '.join(sorted(VALID_TARGET_LANGUAGES))}")
+        return v.lower().strip()
 
 
 class AudioS3Request(BaseModel):
     """Request model for transcribing audio files stored in S3."""
     input_keys: List[str] = Field(..., description="S3 object keys of the input audio files")
     output_prefix: Optional[str] = Field(None, description="Destination S3 prefix for transcription results")
+    
+    @validator('input_keys')
+    def validate_input_keys(cls, v):
+        if not v or len(v) == 0:
+            raise ValueError("input_keys cannot be empty")
+        for key in v:
+            if not key or not isinstance(key, str):
+                raise ValueError("Each input key must be a non-empty string")
+        return v
 
 # New request model for translating text files stored in S3
 class TextS3Request(BaseModel):
@@ -1217,6 +1396,27 @@ class TextS3Request(BaseModel):
     output_prefix: Optional[str] = Field(None, description="Destination S3 prefix for translated files")
     source_lang: str = Field(..., description="Source language code (e.g., 'en')")
     target_lang: str = Field(..., description="Target language code (e.g., 'fr')")
+    
+    @validator('input_keys')
+    def validate_input_keys(cls, v):
+        if not v or len(v) == 0:
+            raise ValueError("input_keys cannot be empty")
+        for key in v:
+            if not key or not isinstance(key, str):
+                raise ValueError("Each input key must be a non-empty string")
+        return v
+    
+    @validator('source_lang')
+    def validate_source_lang(cls, v):
+        if v.lower().strip() not in VALID_SOURCE_LANGUAGES:
+            raise ValueError(f"Invalid source language: {v}. Supported: {', '.join(sorted(VALID_SOURCE_LANGUAGES))}")
+        return v.lower().strip()
+    
+    @validator('target_lang')
+    def validate_target_lang(cls, v):
+        if v.lower().strip() not in VALID_TARGET_LANGUAGES:
+            raise ValueError(f"Invalid target language: {v}. Supported: {', '.join(sorted(VALID_TARGET_LANGUAGES))}")
+        return v.lower().strip()
 
 # --------------------------------------
 # Course Translation S3 Request
@@ -1229,11 +1429,41 @@ class CourseS3Request(BaseModel):
     target_langs: List[str] = Field(..., description="List of target language codes")
     output_prefix: Optional[str] = Field(None, description="Optional root prefix for translated course (defaults to original 'contribute/')")
     use_english: bool = Field(False, description="If true, use already-translated English version as source instead of original language")
+    
+    @validator('course_id')
+    def validate_course_id(cls, v):
+        if not v or not isinstance(v, str) or not v.strip():
+            raise ValueError("course_id must be a non-empty string")
+        return v.strip()
+    
+    @validator('source_lang')
+    def validate_source_lang(cls, v):
+        if v.lower().strip() not in VALID_SOURCE_LANGUAGES:
+            raise ValueError(f"Invalid source language: {v}. Supported: {', '.join(sorted(VALID_SOURCE_LANGUAGES))}")
+        return v.lower().strip()
+    
+    @validator('target_langs')
+    def validate_target_langs(cls, v):
+        if not v or len(v) == 0:
+            raise ValueError("target_langs cannot be empty")
+        for lang in v:
+            if lang.lower().strip() not in VALID_TARGET_LANGUAGES:
+                raise ValueError(f"Invalid target language: {lang}. Supported: {', '.join(sorted(VALID_TARGET_LANGUAGES))}")
+        return [lang.lower().strip() for lang in v]
 
 class TTSS3Request(BaseModel):
     """Request model for generating speech from TXT files stored in S3."""
     input_keys: List[str] = Field(..., description="S3 object keys of the input text files (.txt)")
     output_prefix: Optional[str] = Field(None, description="Destination S3 prefix for generated audio files")
+    
+    @validator('input_keys')
+    def validate_input_keys(cls, v):
+        if not v or len(v) == 0:
+            raise ValueError("input_keys cannot be empty")
+        for key in v:
+            if not key or not isinstance(key, str):
+                raise ValueError("Each input key must be a non-empty string")
+        return v
 
 # -------------------------------------------------------------------
 # New request model for direct text-to-speech with S3 upload (no TXT).
