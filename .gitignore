@@ -11,3 +11,4 @@ test-app/
 elevenlabs_voices.json
 api-test-app/node_modules
 auth_tokens.json
+client_credentials.json

@@ -1371,6 +1371,14 @@ class VideoMergeTool(ToolBase):
         # Toggle for recursive batch mode (process subfolders)
         self.recursive_mode = tk.BooleanVar(value=False)
         
+        # Intro/Outro options
+        self.use_intro = tk.BooleanVar(value=False)
+        self.use_outro = tk.BooleanVar(value=False)
+        
+        # Paths to intro/outro media files
+        self.intro_path = Path(__file__).parent / "media" / "planB_intro.mp4"
+        self.outro_path = Path(__file__).parent / "media" / "pbn_outro.mp3"
+        
         # Check dependencies
         self._check_dependencies()
 
@@ -1411,6 +1419,29 @@ class VideoMergeTool(ToolBase):
         ttk.Checkbutton(mode_frame,
                         text="Recursive batch mode (process subfolders)",
                         variable=self.recursive_mode).pack(anchor='w', padx=10, pady=5)
+        
+    def create_specific_controls(self, parent_frame):
+        """Creates UI elements specific to VideoMergeTool (intro/outro options)."""
+        options_frame = ttk.LabelFrame(parent_frame, text="Video Options")
+        options_frame.pack(fill='x', padx=5, pady=5)
+        
+        # Intro option
+        intro_check = ttk.Checkbutton(options_frame,
+                                     text="Add Plan B intro to beginning",
+                                     variable=self.use_intro)
+        intro_check.pack(anchor='w', padx=10, pady=5)
+        
+        # Outro option  
+        outro_check = ttk.Checkbutton(options_frame,
+                                     text="Use PBN outro audio for last slide",
+                                     variable=self.use_outro)
+        outro_check.pack(anchor='w', padx=10, pady=5)
+        
+        # Note about outro behavior
+        outro_note = ttk.Label(options_frame, 
+                              text="Note: When outro is enabled, the last slide will use the outro audio instead of its MP3 file",
+                              font=('TkDefaultFont', 9, 'italic'))
+        outro_note.pack(anchor='w', padx=25, pady=(0, 5))
         
     def select_input_paths(self):
         """Override to only allow folder selection."""
@@ -1603,12 +1634,24 @@ class VideoMergeTool(ToolBase):
                 segment_file = temp_dir / f"segment_{idx:03d}.mp4"
                 segment_files.append(segment_file)
                 
+                # Check if this is the last slide and outro is enabled
+                is_last_slide = (idx == len(file_pairs) - 1)
+                audio_file = mp3_file
+                
+                if is_last_slide and self.use_outro.get():
+                    # Use outro audio for last slide
+                    if self.outro_path.exists():
+                        audio_file = self.outro_path
+                        self.send_progress_update(f"Using outro audio for last slide")
+                    else:
+                        self.send_progress_update(f"Warning: Outro file not found at {self.outro_path}, using original audio")
+                
                 # Run ffmpeg to create a video segment from image and audio
                 cmd = [
                     'ffmpeg', '-y',
                     '-loop', '1',
                     '-i', str(png_file),
-                    '-i', str(mp3_file),
+                    '-i', str(audio_file),
                     '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2',
                     '-c:v', 'libx264',
                     '-tune', 'stillimage',
@@ -1668,6 +1711,15 @@ class VideoMergeTool(ToolBase):
             # Create a file list for concatenation
             concat_file = temp_dir / "concat_list.txt"
             with open(concat_file, 'w') as f:
+                # Add intro if enabled
+                if self.use_intro.get():
+                    if self.intro_path.exists():
+                        f.write(f"file '{self.intro_path.absolute()}'\n")
+                        self.send_progress_update("Including intro video")
+                    else:
+                        self.send_progress_update(f"Warning: Intro file not found at {self.intro_path}")
+                
+                # Add all video segments
                 for segment in segment_files:
                     f.write(f"file '{segment.absolute()}'\n")
             
