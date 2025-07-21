@@ -1298,8 +1298,13 @@ async def run_course_translation_s3_async(task_id: str, course_id: str, source_l
         from core.pptx_utils import split_pptx_to_single_slides
 
         def deepl_target(code: str) -> str:
-            """Map target language code for DeepL API (convert en -> en-us)."""
-            return 'en-us' if code.lower() == 'en' else code
+            """Map target language code for DeepL API to required variants (e.g., en -> en-us, pt -> pt-pt)."""
+            code_lower = code.lower()
+            if code_lower == 'en':
+                return 'en-us'
+            if code_lower == 'pt':
+                return 'pt-pt'
+            return code
 
         for (part_id, chapter_id), pptx_path in chapter_pptx_unsplit.items():
             txt_entries = sorted(chapter_txts_unsplit.get((part_id, chapter_id), []), key=lambda x: int(x[0]) if x[0].isdigit() else x[0])
