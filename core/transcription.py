@@ -27,10 +27,12 @@ Supported Audio Formats:
 """
 
 import logging
+import tempfile
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, List
 
 import openai
+from pydub import AudioSegment
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +94,7 @@ class AudioTranscriptionCore:
     def transcribe_audio(self, input_path: Path, output_path: Path, 
                         language: Optional[str] = None) -> bool:
         """
-        Transcribe audio file to text.
+        Transcribe audio file to text with automatic file splitting for large files.
         
         Args:
             input_path: Path to input audio file
@@ -109,18 +111,61 @@ class AudioTranscriptionCore:
             if not self.validate_audio_file(input_path):
                 raise ValueError(f"Invalid audio file: {input_path}")
             
-            # Transcribe audio
-            with open(input_path, 'rb') as audio_file:
-                transcript = self.client.audio.transcriptions.create(
-                    model="whisper-1",
-                    file=audio_file,
-                    language=language
-                )
+            # Check file size (25MB limit for OpenAI Whisper API)
+            file_size_mb = input_path.stat().st_size / (1024 * 1024)
+            self.progress_callback(f"Audio file size: {file_size_mb:.1f} MB")
+            
+            if file_size_mb > 24:  # Use 24MB as threshold to be safe
+                self.progress_callback("Large file detected, splitting into chunks...")
+                audio_files = self._prepare_audio_files(input_path)
+                
+                # Transcribe each chunk
+                full_transcript = ""
+                for i, audio_file_path in enumerate(audio_files, 1):
+                    self.progress_callback(f"Transcribing chunk {i}/{len(audio_files)}")
+                    
+                    # Retry logic for each chunk
+                    chunk_transcript = None
+                    for attempt in range(3):
+                        try:
+                            with open(audio_file_path, 'rb') as audio_file:
+                                transcript = self.client.audio.transcriptions.create(
+                                    model="whisper-1",
+                                    file=audio_file,
+                                    language=language
+                                )
+                                chunk_transcript = transcript.text
+                                break
+                        except Exception as chunk_error:
+                            if attempt == 2:  # Last attempt
+                                raise chunk_error
+                            self.progress_callback(f"Chunk {i} failed, retrying... ({chunk_error})")
+                    
+                    if chunk_transcript:
+                        full_transcript += chunk_transcript + " "
+                
+                # Clean up temporary files
+                for temp_file in audio_files:
+                    try:
+                        temp_file.unlink()
+                    except Exception:
+                        pass  # Ignore cleanup errors
+                
+                final_transcript = full_transcript.strip()
+            else:
+                # Small file, transcribe directly
+                with open(input_path, 'rb') as audio_file:
+                    transcript = self.client.audio.transcriptions.create(
+                        model="whisper-1",
+                        file=audio_file,
+                        language=language
+                    )
+                final_transcript = transcript.text
             
             # Save transcription
             self.progress_callback(f"Saving transcription to: {output_path}")
             with open(output_path, 'w', encoding='utf-8') as f:
-                f.write(transcript.text)
+                f.write(final_transcript)
             
             self.progress_callback("Audio transcription completed successfully")
             return True
@@ -130,6 +175,67 @@ class AudioTranscriptionCore:
             logger.error(error_msg)
             self.progress_callback(f"Error: {error_msg}")
             return False
+    
+    def _prepare_audio_files(self, input_path: Path) -> List[Path]:
+        """
+        Split large audio file into chunks for processing.
+        
+        Args:
+            input_path: Path to large audio file
+            
+        Returns:
+            List of paths to temporary audio chunk files
+        """
+        try:
+            self.progress_callback("Loading audio for splitting...")
+            
+            # Load audio file using pydub
+            audio = AudioSegment.from_file(input_path)
+            
+            # Calculate chunk duration (aim for ~20MB chunks)
+            # Estimate: MP3 @ 128kbps ≈ 1MB per minute, so ~20 minutes per chunk
+            chunk_duration_ms = 20 * 60 * 1000  # 20 minutes in milliseconds
+            audio_duration_ms = len(audio)
+            
+            self.progress_callback(f"Audio duration: {audio_duration_ms/1000/60:.1f} minutes")
+            
+            # Calculate number of chunks needed
+            num_chunks = max(1, (audio_duration_ms + chunk_duration_ms - 1) // chunk_duration_ms)
+            self.progress_callback(f"Splitting into {num_chunks} chunks")
+            
+            # Create temporary files
+            temp_files = []
+            
+            for i in range(num_chunks):
+                start_ms = i * chunk_duration_ms
+                end_ms = min((i + 1) * chunk_duration_ms, audio_duration_ms)
+                
+                self.progress_callback(f"Creating chunk {i+1}/{num_chunks}")
+                
+                # Extract chunk
+                chunk = audio[start_ms:end_ms]
+                
+                # Create temporary file
+                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
+                temp_path = Path(temp_file.name)
+                temp_file.close()
+                
+                # Export chunk
+                chunk.export(temp_path, format="mp3")
+                temp_files.append(temp_path)
+                
+                self.progress_callback(f"Chunk {i+1} saved: {temp_path.stat().st_size / 1024 / 1024:.1f} MB")
+            
+            return temp_files
+            
+        except Exception as e:
+            # Clean up any created files on error
+            for temp_file in temp_files:
+                try:
+                    temp_file.unlink()
+                except Exception:
+                    pass
+            raise RuntimeError(f"Failed to split audio file: {e}")
     
     def validate_audio_file(self, file_path: Path) -> bool:
         """Validate that the file is a supported audio format."""
