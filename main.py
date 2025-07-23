@@ -41,56 +41,16 @@ API_KEYS_FILE = "api_keys.json"
 # --- Setup Logging ---
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Import the updated ConfigManager from core
-from core.config import ConfigManager as CoreConfigManager
-
-class ConfigManager:
-    """Manages configuration files for the application."""
-
-    def __init__(self, languages_file=SUPPORTED_LANGUAGES_FILE, api_keys_file=API_KEYS_FILE):
-        self.base_path = Path(__file__).resolve().parent
-        self.languages_file = self.base_path / languages_file
-        self.api_keys_file = self.base_path / api_keys_file
-
-        self.languages = self.load_json(self.languages_file)
-        
-        # Use core ConfigManager for API keys to support .env
-        self.core_config = CoreConfigManager(use_project_api_keys=True)
-        self.api_keys = self.core_config.get_api_keys()
-
-    def load_json(self, file_path: Path):
-        """Loads JSON data from a file."""
-        try:
-            with open(file_path, "r") as f:
-                return json.load(f)
-        except FileNotFoundError:
-            logging.warning(f"Config file not found: {file_path}. Creating a default.")
-            return {}
-        except json.JSONDecodeError:
-            logging.error(f"Error decoding JSON from {file_path}. Please check the file for errors.")
-            return {}
-
-    def save_json(self, data, file_path: Path):
-        """Saves JSON data to a file."""
-        try:
-            with open(file_path, "w") as f:
-                json.dump(data, f, indent=4)
-        except Exception as e:
-            logging.error(f"Error saving to {file_path}: {e}")
-
-    def get_languages(self):
-        return self.languages
-
-
-    def get_api_keys(self):
-        return self.api_keys
-
-    def save_languages(self):
-        self.save_json(self.languages, self.languages_file)
-    
-    def save_api_keys(self):
-        """Saves the current API keys to the JSON file."""
-        self.save_json(self.api_keys, self.api_keys_file)
+# Import consolidated core modules
+from core.config import ConfigManager
+from core.services import ServiceManager, create_service_manager
+from core.processors import (
+    create_translation_processor, create_audio_processor, create_conversion_processor,
+    ProgressReporter, ProcessorConfig, ProcessingStatus
+)
+from core.task_manager import TaskManager, QueueProgressAdapter
+from core.validation import validate_file_size, validate_language_code
+from core.file_utils import should_skip_processing, get_file_size_mb
 
 class ToolBase:
     """Base class for all tools in the application."""
@@ -103,6 +63,12 @@ class ToolBase:
         self.input_paths = []
         self.output_path = None
         self.supported_languages = self.config_manager.get_languages()
+        
+        # Initialize service manager for consolidated API access
+        self.service_manager = create_service_manager(config_manager)
+        
+        # Create progress reporter for GUI
+        self.progress_reporter = ProgressReporter(callback=self.send_progress_update)
         
         # Add selection mode variable
         self.selection_mode = tk.StringVar(value="file")  # "file" or "folder"
@@ -322,11 +288,8 @@ class ToolBase:
         output_filename = input_file.stem + output_extension
         output_file = output_dir / output_filename
         
-        if output_file.exists():
-            self.send_progress_update(f"Skipping {input_file.name} - output already exists: {output_file.name}")
-            return True
-        
-        return False
+        # Use consolidated file_utils function
+        return should_skip_processing(input_file, output_file, check_exists=True)
 
     def handle_drop(self, event):
         """Handles drag and drop events."""
@@ -447,12 +410,8 @@ class TextToSpeechTool(ToolBase):
             raise ValueError("ElevenLabs API key not configured. Please add your API key in the Configuration menu.")
 
     def process_file(self, input_file: Path, output_dir: Path):
-        """Processes a single text file for TTS conversion."""
+        """Processes a single text file for TTS conversion using consolidated audio processor."""
         try:
-            # Check if should skip
-            if self.should_skip_file(input_file, output_dir, '.mp3'):
-                return
-            
             # Check for interruption
             if self.stop_flag.is_set():
                 raise InterruptedError("Processing stopped by user")
@@ -460,26 +419,36 @@ class TextToSpeechTool(ToolBase):
             # Determine output path
             output_file = output_dir / f"{input_file.stem}.mp3"
             
-            # Get API key
-            api_key = self.config_manager.get_api_keys().get("elevenlabs")
+            # Create audio processor with GUI-specific progress reporter
+            progress_reporter = ProgressReporter(callback=lambda msg: (
+                self.send_progress_update(msg) if not self.stop_flag.is_set() 
+                else (_ for _ in ()).throw(InterruptedError("Processing stopped by user"))
+            ))
             
-            # Create progress callback that checks for interruption
-            def progress_callback(message: str):
-                if self.stop_flag.is_set():
-                    raise InterruptedError("Processing stopped by user")
-                self.send_progress_update(message)
+            processor = create_audio_processor(
+                self.service_manager,
+                progress_reporter=progress_reporter,
+                config=ProcessorConfig(
+                    skip_existing=self.check_output_exists.get(),
+                    allowed_extensions={'.txt'},
+                    max_file_size_mb=10.0
+                )
+            )
             
-            # Initialize core TTS module
-            from core.text_to_speech import TextToSpeechCore
-            tts_core = TextToSpeechCore(api_key=api_key, progress_callback=progress_callback)
+            # Process the file using consolidated processor
+            result = processor.process_file(
+                input_file,
+                output_file,
+                operation='synthesize'
+            )
             
-            # Use the core module to process the file
-            success = tts_core.text_to_speech_file(input_file, output_file)
-            
-            if success:
+            if result.success:
                 self.send_progress_update(f"Successfully generated audio: {output_file.name}")
+            elif result.skipped:
+                # Skip message already sent by processor
+                pass
             else:
-                self.send_progress_update(f"Failed to generate audio for: {input_file.name}")
+                self.send_progress_update(f"Failed to generate audio for: {input_file.name} - {result.message}")
             
         except InterruptedError:
             raise
@@ -579,15 +548,9 @@ class PPTXTranslationTool(ToolBase, LanguageSelectionMixin):
 
 
     def process_file(self, input_file: Path, output_dir: Path = None):
-        """Processes a single PPTX file using PPTXTranslationCore."""
+        """Processes a single PPTX file using consolidated translation processor."""
         if input_file.suffix.lower() != ".pptx":
             self.send_progress_update(f"Skipping non-PPTX file: {input_file}")
-            return
-        
-        # Check if should skip - PPTX files append target language before extension
-        output_filename = f"{input_file.stem}_{self.target_lang.get()}{input_file.suffix}"
-        if self.check_output_exists.get() and (output_dir / output_filename).exists():
-            self.send_progress_update(f"Skipping {input_file.name} - output already exists: {output_filename}")
             return
 
         try:
@@ -595,29 +558,41 @@ class PPTXTranslationTool(ToolBase, LanguageSelectionMixin):
             if self.stop_flag.is_set():
                 raise InterruptedError("Processing stopped by user")
                 
-            # Get API key
-            api_key = self.config_manager.get_api_keys().get("deepl")
-            if not api_key:
-                raise ValueError("DeepL API key not configured. Please add your API key in the Configuration menu.")
-            
-            # Create progress callback that checks for interruption
-            def progress_callback(message: str):
-                if self.stop_flag.is_set():
-                    raise InterruptedError("Processing stopped by user")
-                self.send_progress_update(message)
-            
-            # Initialize core translator
-            from core.pptx_translation import PPTXTranslationCore
-            translator = PPTXTranslationCore(api_key=api_key, progress_callback=progress_callback)
-            
-            # Use core to translate the file
+            # Create output filename with target language suffix
+            output_filename = f"{input_file.stem}_{self.target_lang.get()}{input_file.suffix}"
             output_file = output_dir / output_filename
-            success = translator.translate_pptx(input_file, output_file, self.source_lang.get(), self.target_lang.get())
             
-            if success:
+            # Create translation processor with GUI-specific progress reporter
+            progress_reporter = ProgressReporter(callback=lambda msg: (
+                self.send_progress_update(msg) if not self.stop_flag.is_set() 
+                else (_ for _ in ()).throw(InterruptedError("Processing stopped by user"))
+            ))
+            
+            processor = create_translation_processor(
+                self.service_manager,
+                progress_reporter=progress_reporter,
+                config=ProcessorConfig(
+                    skip_existing=self.check_output_exists.get(),
+                    allowed_extensions={'.pptx'},
+                    max_file_size_mb=50.0
+                )
+            )
+            
+            # Process the file using consolidated processor
+            result = processor.process_file(
+                input_file,
+                output_file,
+                source_language=self.source_lang.get(),
+                target_language=self.target_lang.get()
+            )
+            
+            if result.success:
                 self.send_progress_update(f"Successfully translated: {output_file.name}")
+            elif result.skipped:
+                # Skip message already sent by processor
+                pass
             else:
-                self.send_progress_update(f"Failed to translate: {input_file.name}")
+                self.send_progress_update(f"Failed to translate: {input_file.name} - {result.message}")
 
         except InterruptedError:
             raise
@@ -644,39 +619,49 @@ class AudioTranscriptionTool(ToolBase):
             logging.warning("OpenAI API key not configured")
 
     def process_file(self, input_file: Path, output_dir: Path):
-        """Processes a single audio file using AudioTranscriptionCore."""
+        """Processes a single audio file using consolidated audio processor."""
         try:
-            # Check if should skip - audio transcripts append _transcript.txt
-            output_filename = f"{input_file.stem}_transcript.txt"
-            output_path = output_dir / output_filename
-            
-            if self.check_output_exists.get() and output_path.exists():
-                self.send_progress_update(f"Skipping {input_file.name} - output already exists: {output_filename}")
-                return
-                
-            self.send_progress_update(f"Transcribing {input_file.name}...")
-            
             # Check if processing should stop
             if self.stop_flag.is_set():
                 raise InterruptedError("Processing stopped by user")
             
-            # Initialize transcription core with progress callback
-            transcriber = AudioTranscriptionCore(
-                api_key=self.api_key,
-                progress_callback=self.send_progress_update
+            # Create output filename with transcript suffix
+            output_filename = f"{input_file.stem}_transcript.txt"
+            output_path = output_dir / output_filename
+            
+            # Create audio processor with GUI-specific progress reporter
+            progress_reporter = ProgressReporter(callback=lambda msg: (
+                self.send_progress_update(msg) if not self.stop_flag.is_set() 
+                else (_ for _ in ()).throw(InterruptedError("Processing stopped by user"))
+            ))
+            
+            processor = create_audio_processor(
+                self.service_manager,
+                progress_reporter=progress_reporter,
+                config=ProcessorConfig(
+                    skip_existing=self.check_output_exists.get(),
+                    allowed_extensions=self.supported_extensions,
+                    max_file_size_mb=100.0
+                )
             )
             
-            # Transcribe audio file
-            success = transcriber.transcribe_audio(
-                input_path=input_file,
-                output_path=output_path
+            # Process the file using consolidated processor
+            result = processor.process_file(
+                input_file,
+                output_path,
+                operation='transcribe'
             )
             
-            if success:
+            if result.success:
                 self.send_progress_update(f"Successfully transcribed: {input_file.name}")
+            elif result.skipped:
+                # Skip message already sent by processor
+                pass
             else:
-                raise RuntimeError("Transcription failed")
+                self.send_progress_update(f"Failed to transcribe: {input_file.name} - {result.message}")
 
+        except InterruptedError:
+            raise
         except Exception as e:
             error_message = f"Error transcribing {input_file.name}: {e}"
             self.send_progress_update(error_message)
@@ -735,43 +720,47 @@ class TextTranslationTool(ToolBase, LanguageSelectionMixin):
         self.target_lang_combo.pack(side=tk.LEFT, padx=5)
 
     def process_file(self, input_file: Path, output_dir: Path):
-        """Processes a single text file using TextTranslationCore."""
+        """Processes a single text file using consolidated translation processor."""
         try:
-            # Check if should skip - text files append target language before extension
-            output_filename = f"{input_file.stem}_{self.target_lang.get()}{input_file.suffix}"
-            if self.check_output_exists.get() and (output_dir / output_filename).exists():
-                self.send_progress_update(f"Skipping {input_file.name} - output already exists: {output_filename}")
-                return
-                
             # Check for interruption
             if self.stop_flag.is_set():
                 raise InterruptedError("Processing stopped by user")
 
-            # Get API key
-            api_key = self.config_manager.get_api_keys().get("deepl")
-            if not api_key:
-                raise ValueError("DeepL API key not configured. Please add your API key in the Configuration menu.")
-            
-            # Create output file path
+            # Create output filename with target language suffix
+            output_filename = f"{input_file.stem}_{self.target_lang.get()}{input_file.suffix}"
             output_file = output_dir / output_filename
             
-            # Create progress callback that checks for interruption
-            def progress_callback(message: str):
-                if self.stop_flag.is_set():
-                    raise InterruptedError("Processing stopped by user")
-                self.send_progress_update(message)
+            # Create translation processor with GUI-specific progress reporter
+            progress_reporter = ProgressReporter(callback=lambda msg: (
+                self.send_progress_update(msg) if not self.stop_flag.is_set() 
+                else (_ for _ in ()).throw(InterruptedError("Processing stopped by user"))
+            ))
             
-            # Initialize core translator
-            from core.text_translation import TextTranslationCore
-            translator = TextTranslationCore(api_key=api_key, progress_callback=progress_callback)
+            processor = create_translation_processor(
+                self.service_manager, 
+                progress_reporter=progress_reporter,
+                config=ProcessorConfig(
+                    skip_existing=self.check_output_exists.get(),
+                    allowed_extensions={'.txt'},
+                    max_file_size_mb=50.0
+                )
+            )
             
-            # Use core to translate the file
-            success = translator.translate_text_file(input_file, output_file, self.source_lang.get(), self.target_lang.get())
+            # Process the file using consolidated processor
+            result = processor.process_file(
+                input_file, 
+                output_file,
+                source_language=self.source_lang.get(),
+                target_language=self.target_lang.get()
+            )
             
-            if success:
+            if result.success:
                 self.send_progress_update(f"Successfully translated: {input_file.name}")
+            elif result.skipped:
+                # Skip message already sent by processor
+                pass
             else:
-                self.send_progress_update(f"Failed to translate: {input_file.name}")
+                self.send_progress_update(f"Failed to translate: {input_file.name} - {result.message}")
 
         except InterruptedError:
             raise
@@ -826,57 +815,56 @@ class PPTXtoPDFTool(ToolBase):
 
     def process_file(self, input_file: Path, output_dir: Path):
         """
-        Processes a single PPTX file using PPTXConverterCore.
+        Processes a single PPTX file using consolidated conversion processor.
         Converts to PDF, PNG, or WEBP with proper sequential naming.
         """
         try:
+            # Check for interruption
+            if self.stop_flag.is_set():
+                raise InterruptedError("Processing stopped by user")
+            
             output_format = self.output_format.get()
             
-            # Check if should skip based on output format
-            if self.check_output_exists.get():
-                skip = False
-                if output_format == 'pdf':
-                    output_file = output_dir / f"{input_file.stem}.pdf"
-                    if output_file.exists():
-                        self.send_progress_update(f"Skipping {input_file.name} - output already exists: {output_file.name}")
-                        skip = True
-                elif output_format in ['png', 'webp']:
-                    # Check if first slide exists (slide_01 file format from core)
-                    ext = '.png' if output_format == 'png' else '.webp'
-                    first_slide = output_dir / f"{input_file.stem}_slide_01{ext}"
-                    if first_slide.exists():
-                        self.send_progress_update(f"Skipping {input_file.name} - output already exists: {first_slide.name}")
-                        skip = True
-                
-                if skip:
-                    return
-            
-            # Get API key
-            api_secret = self.config_manager.get_api_keys().get("convertapi")
-            
-            # Create progress callback that checks for interruption
-            def progress_callback(message: str):
-                if self.stop_flag.is_set():
-                    raise InterruptedError("Processing stopped by user")
-                self.send_progress_update(message)
-            
-            # Initialize core converter
-            from core.pptx_converter import PPTXConverterCore
-            converter = PPTXConverterCore(api_key=api_secret, progress_callback=progress_callback)
-            
-            # Process based on output format
-            success = False
+            # Determine output path based on format
             if output_format == 'pdf':
                 output_file = output_dir / f"{input_file.stem}.pdf"
-                success = converter.convert_pptx_to_pdf(input_file, output_file)
-            elif output_format == 'png':
-                result_files = converter.convert_pptx_to_png(input_file, output_dir)
-                success = len(result_files) > 0
-            elif output_format == 'webp':
-                result_files = converter.convert_pptx_to_webp(input_file, output_dir)
-                success = len(result_files) > 0
+            else:
+                # For image formats, the processor will handle multiple output files
+                output_file = output_dir / f"{input_file.stem}_slide_01.{output_format}"
             
-            return success
+            # Create conversion processor with GUI-specific progress reporter
+            progress_reporter = ProgressReporter(callback=lambda msg: (
+                self.send_progress_update(msg) if not self.stop_flag.is_set() 
+                else (_ for _ in ()).throw(InterruptedError("Processing stopped by user"))
+            ))
+            
+            processor = create_conversion_processor(
+                self.service_manager,
+                progress_reporter=progress_reporter,
+                config=ProcessorConfig(
+                    skip_existing=self.check_output_exists.get(),
+                    allowed_extensions=self.supported_extensions,
+                    output_formats=['pdf', 'png', 'webp'],
+                    max_file_size_mb=25.0
+                )
+            )
+            
+            # Process the file using consolidated processor
+            result = processor.process_file(
+                input_file,
+                output_file,
+                output_format=output_format
+            )
+            
+            if result.success:
+                self.send_progress_update(f"Successfully converted: {input_file.name}")
+                return True
+            elif result.skipped:
+                # Skip message already sent by processor
+                return True
+            else:
+                self.send_progress_update(f"Failed to convert: {input_file.name} - {result.message}")
+                return False
 
         except InterruptedError:
             raise
@@ -1759,7 +1747,11 @@ class MainApp(TkinterDnD.Tk):
         self.geometry("800x600")
 
         # Initialize components
-        self.config_manager = ConfigManager()
+        self.config_manager = ConfigManager(
+            use_project_api_keys=True,
+            languages_file=SUPPORTED_LANGUAGES_FILE,
+            api_keys_file=API_KEYS_FILE
+        )
         self.progress_queue = queue.Queue()
 
         # Create UI
