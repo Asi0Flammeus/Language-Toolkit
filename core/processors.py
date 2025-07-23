@@ -701,7 +701,7 @@ class TranslationProcessor(FileProcessor):
                     input_path, output_path, source_lang, target_lang
                 )
             else:  # PPTX
-                success = translator.translate_file(
+                success = translator.translate_pptx(
                     input_path, output_path, source_lang, target_lang
                 )
             
@@ -776,7 +776,7 @@ class AudioProcessor(FileProcessor):
     
     def _process_transcription(self, input_path: Path, output_path: Path, **options) -> ProcessingResult:
         """Process audio transcription using OpenAI Whisper"""
-        from core.audio_transcription import AudioTranscriptionCore
+        from core.transcription import AudioTranscriptionCore
         
         # Create transcription service
         transcriber = self.service_manager.get_openai_service(
@@ -809,7 +809,7 @@ class AudioProcessor(FileProcessor):
         )
         
         # Perform text-to-speech
-        success = tts.process_file(input_path, output_path, **options)
+        success = tts.text_to_speech_file(input_path, output_path, **options)
         
         if success:
             return ProcessingResult(
@@ -855,7 +855,8 @@ class ConversionProcessor(FileProcessor):
         """
         try:
             # Validate output format
-            validated_format = validate_output_format(output_format)
+            allowed_formats = {'pdf', 'png', 'webp'}  # Standard PPTX conversion formats
+            validated_format = validate_output_format(output_format, allowed_formats)
             
             # Determine converter service based on input type
             input_ext = get_file_extension(input_path, lowercase=True)
@@ -872,10 +873,17 @@ class ConversionProcessor(FileProcessor):
                 progress_callback=self.progress_reporter.report_progress
             )
             
-            # Perform conversion
-            success = converter.convert_file(
-                input_path, output_path, validated_format, **options
-            )
+            # Perform conversion based on format
+            if validated_format == 'pdf':
+                success = converter.convert_pptx_to_pdf(input_path, output_path)
+            elif validated_format == 'png':
+                result_files = converter.convert_pptx_to_png(input_path, output_path.parent)
+                success = len(result_files) > 0
+            elif validated_format == 'webp':
+                result_files = converter.convert_pptx_to_webp(input_path, output_path.parent)
+                success = len(result_files) > 0
+            else:
+                raise ValueError(f"Unsupported output format: {validated_format}")
             
             if success:
                 return ProcessingResult(

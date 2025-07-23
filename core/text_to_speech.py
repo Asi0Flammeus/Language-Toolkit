@@ -97,7 +97,30 @@ class TextToSpeechCore:
         self.api_key = api_key
         self.progress_callback = progress_callback or (lambda x: None)
         self.voices = []
+        self.local_voice_mapping = {}
+        
+        # Load local voice mapping from elevenlabs_voices.json
+        self._load_local_voice_mapping()
+        
+        # Load available voices from API
         self._load_voices()
+    
+    def _load_local_voice_mapping(self):
+        """Load local voice name to ID mapping from elevenlabs_voices.json."""
+        try:
+            # Look for the file in the project root directory
+            voices_file = Path(__file__).parent.parent / "elevenlabs_voices.json"
+            
+            if voices_file.exists():
+                with open(voices_file, 'r', encoding='utf-8') as f:
+                    self.local_voice_mapping = json.load(f)
+                    logger.info(f"Loaded {len(self.local_voice_mapping)} local voice mappings from {voices_file}")
+            else:
+                logger.warning(f"Local voice mapping file not found: {voices_file}")
+                
+        except Exception as e:
+            logger.error(f"Failed to load local voice mapping: {e}")
+            self.local_voice_mapping = {}
     
     def _load_voices(self):
         """Load available voices from ElevenLabs API."""
@@ -218,26 +241,97 @@ class TextToSpeechCore:
         return None
     
     def parse_voice_selection(self, voice_input: str) -> Optional[str]:
-        """Parse voice selection from various input formats."""
+        """
+        Parse voice selection from various input formats.
+        
+        Priority order:
+        1. Local voice mapping from elevenlabs_voices.json  
+        2. Direct voice ID format
+        3. API voice name lookup
+        4. "Name (ID)" format extraction
+        """
         if not voice_input:
             return None
         
         voice_input = voice_input.strip()
         
-        # Check if it's already a voice ID (format: voice_id)
+        # 1. Check local voice mapping first (highest priority)
+        if voice_input in self.local_voice_mapping:
+            voice_id = self.local_voice_mapping[voice_input]
+            logger.debug(f"Found voice '{voice_input}' in local mapping: {voice_id}")
+            return voice_id
+        
+        # 2. Check if it's already a voice ID (format: voice_id)
         if re.match(r'^[a-zA-Z0-9]{20,}$', voice_input):
             return voice_input
         
-        # Try to find by name
+        # 3. Try to find by name in API voices
         voice_id = self.find_voice_by_name(voice_input)
         if voice_id:
             return voice_id
         
-        # Try to extract from "Name (ID)" format
+        # 4. Try to extract from "Name (ID)" format
         match = re.search(r'\\(([a-zA-Z0-9]+)\\)$', voice_input)
         if match:
             return match.group(1)
         
+        logger.warning(f"Could not resolve voice: '{voice_input}'. Available local voices: {list(self.local_voice_mapping.keys())}")
+        return None
+    
+    def get_available_voice_names(self) -> Dict[str, str]:
+        """
+        Get all available voice names and their IDs.
+        
+        Returns:
+            Dictionary mapping voice names to voice IDs, with local mappings taking priority
+        """
+        # Start with API voices
+        voice_map = {}
+        for voice in self.voices:
+            name = voice.get("name", "")
+            voice_id = voice.get("voice_id", "")
+            if name and voice_id:
+                voice_map[name] = voice_id
+        
+        # Override with local mappings (they take priority)
+        voice_map.update(self.local_voice_mapping)
+        
+        return voice_map
+    
+    def extract_voice_from_filename(self, file_path: Path) -> Optional[str]:
+        """
+        Extract voice name from filename by matching against known voice names.
+        
+        For file 'test_Loic_transcript_fr.txt':
+        - Splits into parts: ['test', 'Loic', 'transcript', 'fr']  
+        - Checks each part against elevenlabs_voices.json keys
+        - Returns 'Loic' if found in the mapping
+        
+        Args:
+            file_path: Path to the input file
+            
+        Returns:
+            Voice name if found in local mapping, None otherwise
+        """
+        # Split filename by underscores, hyphens, and spaces
+        filename_parts = re.split(r'[_\-\s]+', file_path.stem)
+        
+        # Check each part against local voice mapping (case-insensitive)
+        for part in filename_parts:
+            part_clean = part.strip()
+            
+            # Direct match (case-sensitive)
+            if part_clean in self.local_voice_mapping:
+                logger.debug(f"Found voice '{part_clean}' in filename '{file_path.name}'")
+                return part_clean
+            
+            # Case-insensitive match
+            for voice_name in self.local_voice_mapping.keys():
+                if part_clean.lower() == voice_name.lower():
+                    logger.debug(f"Found voice '{voice_name}' (case-insensitive) in filename '{file_path.name}'")
+                    return voice_name
+        
+        logger.debug(f"No voice found in filename '{file_path.name}'. Available voices: {list(self.local_voice_mapping.keys())}")
         return None
     
     def validate_text_file(self, file_path: Path) -> bool:
@@ -253,23 +347,33 @@ class TextToSpeechCore:
             return False
     
     def text_to_speech_file(self, input_path: Path, output_path: Path, voice_settings: Optional[Dict[str, Any]] = None) -> bool:
-        """Backward-compatibility helper used by *api_server.py*.
-
-        The API layer expects a ``text_to_speech_file`` method that converts a
-        single text file to an audio file.  This wrapper resolves the correct
-        ElevenLabs *voice_id* by inspecting the filename.  The expected naming
-        convention is that the voice label appears as the last underscore-
-        separated token before the extension (e.g. ``story_Bella.txt`` → voice
-        "Bella").  If no match is found we fall back to the first voice returned
-        by :py:meth:`get_voices`.
         """
-        # Attempt to extract a potential voice label from the filename
-        voice_label: Optional[str] = None
-        stem_parts = input_path.stem.split("_")
-        if stem_parts:
-            voice_candidate = stem_parts[-1]
-            voice_label = voice_candidate.strip()
-
+        Convert a text file to speech audio with intelligent voice detection.
+        
+        This method extracts voice names from filenames by matching against the 
+        local voice mapping in elevenlabs_voices.json. It supports multiple 
+        separators (underscore, hyphen, space) and case-insensitive matching.
+        
+        Examples:
+            'test_Loic_transcript_fr.txt' → finds 'Loic' → uses voice ID from JSON
+            'story-Fanis-english.txt' → finds 'Fanis' → uses voice ID from JSON  
+            'content_Rogzy.txt' → finds 'Rogzy' → uses voice ID from JSON
+            
+        Fallback behavior:
+            1. If no voice found in filename → uses first available API voice
+            2. If no API voices available → returns False
+            
+        Args:
+            input_path: Path to text file to convert
+            output_path: Path where audio file will be saved
+            voice_settings: Optional voice configuration overrides
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        # Extract voice name from filename using intelligent matching against local voice mapping
+        voice_label = self.extract_voice_from_filename(input_path)
+        
         # Convert the label to a voice_id using the existing helper
         voice_id = self.parse_voice_selection(voice_label or "") if voice_label else None
 
