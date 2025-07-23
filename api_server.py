@@ -23,7 +23,7 @@ from botocore.exceptions import ClientError, BotoCoreError
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import (BackgroundTasks, Depends, FastAPI, File, Form,
+from fastapi import (BackgroundTasks, Body, Depends, FastAPI, File, Form,
                      HTTPException, UploadFile)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse

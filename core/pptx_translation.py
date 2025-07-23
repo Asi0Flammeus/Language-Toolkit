@@ -107,8 +107,26 @@ class PPTXTranslationCore:
         try:
             self.progress_callback(f"Opening PPTX file: {input_path}")
             
+            # Check if file exists and has content
+            if not input_path.exists():
+                raise FileNotFoundError(f"Input file does not exist: {input_path}")
+            
+            file_size = input_path.stat().st_size
+            if file_size == 0:
+                raise ValueError(f"Input file is empty: {input_path}")
+            
+            self.progress_callback(f"File size: {file_size} bytes")
+            
             # Load presentation
-            prs = Presentation(str(input_path))
+            try:
+                prs = Presentation(str(input_path))
+            except Exception as e:
+                # Log first few bytes of file for debugging
+                with open(input_path, 'rb') as f:
+                    header = f.read(20)
+                    header_hex = header.hex()
+                self.progress_callback(f"File header (hex): {header_hex}")
+                raise ValueError(f"Failed to open PPTX file: {str(e)}")
             
             slide_count = len(prs.slides)
             self.progress_callback(f"Found {slide_count} slides to translate")
