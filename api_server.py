@@ -85,18 +85,18 @@ class RateLimiter:
     def __init__(self, requests_per_minute: int = 60):
         self.requests_per_minute = requests_per_minute
         self.requests = defaultdict(list)
-    
+
     def is_allowed(self, client_id: str) -> bool:
         now = time.time()
         minute_ago = now - 60
-        
+
         # Clean old requests
         self.requests[client_id] = [req_time for req_time in self.requests[client_id] if req_time > minute_ago]
-        
+
         # Check rate limit
         if len(self.requests[client_id]) >= self.requests_per_minute:
             return False
-        
+
         # Record this request
         self.requests[client_id].append(now)
         return True
@@ -139,13 +139,13 @@ def load_supported_languages():
         logger.error(f"Failed to load supported_languages.json: {e}")
         # Fallback to default languages if file not found
         source_langs = {
-            "bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr", "hu", "id", 
-            "it", "ja", "lt", "lv", "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", 
+            "bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr", "hu", "id",
+            "it", "ja", "lt", "lv", "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv",
             "tr", "uk", "zh"
         }
         target_langs = {
-            "bg", "cs", "da", "de", "el", "en-gb", "en-us", "es", "et", "fi", "fr", 
-            "hu", "id", "it", "ja", "ko", "lt", "lv", "nl", "pl", "pt-br", "pt-pt", 
+            "bg", "cs", "da", "de", "el", "en-gb", "en-us", "es", "et", "fi", "fr",
+            "hu", "id", "it", "ja", "ko", "lt", "lv", "nl", "pl", "pt-br", "pt-pt",
             "ro", "ru", "sk", "sl", "sv", "tr", "uk", "zh"
         }
         return source_langs, target_langs
@@ -191,11 +191,11 @@ async def verify_token(token: str = Depends(security)) -> str:
         client_id: Optional[str] = payload.get("sub")
         if client_id is None:
             raise HTTPException(status_code=401, detail="Invalid token payload", headers={"WWW-Authenticate": "Bearer"})
-        
+
         # Apply rate limiting
         if not rate_limiter.is_allowed(client_id):
             raise HTTPException(status_code=429, detail="Rate limit exceeded. Please try again later.")
-        
+
         return client_id
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token", headers={"WWW-Authenticate": "Bearer"})
@@ -311,7 +311,7 @@ class MultiTranslationRequest(BaseModel):
 class ConversionRequest(BaseModel):
     """PPTX conversion request model"""
     output_format: str = Field(..., description="Output format: 'pdf' or 'png'")
-    
+
     @validator('output_format')
     def validate_output_format_field(cls, v):
         """Validate output format against allowed formats"""
@@ -353,29 +353,29 @@ def validate_s3_path(path: str) -> bool:
     # Check for path traversal attempts
     if ".." in path or path.startswith("/") or "\\" in path:
         return False
-    
+
     # Check for suspicious patterns
     suspicious_patterns = ["~", "${", "$(", "`", "%", "&", "|", ";", "<", ">", "\n", "\r", "\0"]
     for pattern in suspicious_patterns:
         if pattern in path:
             return False
-    
+
     # Ensure path components are reasonable
     parts = path.split("/")
     for part in parts:
         if len(part) > 255 or len(part) == 0:
             return False
-    
+
     return True
 
 def validate_file_size(file: UploadFile, file_type: str = "general") -> None:
     """
     Validate uploaded file size against configured limits.
-    
+
     Args:
         file: The uploaded file to validate
         file_type: Type of file for specific size limits ('pptx', 'audio', 'text', 'general')
-    
+
     Raises:
         HTTPException: If file size exceeds the limit
     """
@@ -392,7 +392,7 @@ def validate_file_size(file: UploadFile, file_type: str = "general") -> None:
             return
     else:
         file_size = file.size
-    
+
     # Determine size limit based on file type
     size_limits = {
         "pptx": MAX_PPTX_SIZE,
@@ -400,9 +400,9 @@ def validate_file_size(file: UploadFile, file_type: str = "general") -> None:
         "text": MAX_TEXT_SIZE,
         "general": MAX_FILE_SIZE
     }
-    
+
     max_size = size_limits.get(file_type, MAX_FILE_SIZE)
-    
+
     if file_size > max_size:
         size_mb = max_size / (1024 * 1024)
         actual_mb = file_size / (1024 * 1024)
@@ -411,16 +411,16 @@ def validate_file_size(file: UploadFile, file_type: str = "general") -> None:
             detail=f"File '{file.filename}' is too large ({actual_mb:.1f}MB). "
                    f"Maximum allowed size for {file_type} files is {size_mb:.1f}MB."
         )
-    
+
     logger.info(f"File size validation passed: {file.filename} ({file_size} bytes)")
 
 def get_file_type_from_filename(filename: str) -> str:
     """Determine file type category from filename for size validation."""
     if not filename:
         return "general"
-    
+
     extension = Path(filename).suffix.lower()
-    
+
     if extension == '.pptx':
         return "pptx"
     elif extension in ['.txt']:
@@ -433,11 +433,11 @@ def get_file_type_from_filename(filename: str) -> str:
 def validate_language_code(language: str, is_target: bool = False) -> None:
     """
     Validate language code against supported languages.
-    
+
     Args:
         language: Language code to validate
         is_target: Whether this is a target language (allows more variants)
-    
+
     Raises:
         HTTPException: If language code is invalid
     """
@@ -446,10 +446,10 @@ def validate_language_code(language: str, is_target: bool = False) -> None:
             status_code=400,
             detail="Language code must be a non-empty string"
         )
-    
+
     language = language.lower().strip()
     valid_languages = VALID_TARGET_LANGUAGES if is_target else VALID_SOURCE_LANGUAGES
-    
+
     if language not in valid_languages:
         lang_type = "target" if is_target else "source"
         raise HTTPException(
@@ -461,17 +461,17 @@ def validate_language_code(language: str, is_target: bool = False) -> None:
 def validate_file_extension(filename: str, allowed_extensions: set) -> None:
     """
     Validate file extension against allowed extensions.
-    
+
     Args:
         filename: Name of the file to validate
         allowed_extensions: Set of allowed extensions (with dots)
-    
+
     Raises:
         HTTPException: If file extension is not allowed
     """
     if not filename:
         raise HTTPException(status_code=400, detail="Filename cannot be empty")
-    
+
     extension = Path(filename).suffix.lower()
     if extension not in allowed_extensions:
         raise HTTPException(
@@ -483,17 +483,17 @@ def validate_file_extension(filename: str, allowed_extensions: set) -> None:
 def validate_output_format(format_str: str, allowed_formats: set) -> None:
     """
     Validate output format against allowed formats.
-    
+
     Args:
         format_str: Format string to validate
         allowed_formats: Set of allowed format strings
-    
+
     Raises:
         HTTPException: If format is not allowed
     """
     if not format_str or not isinstance(format_str, str):
         raise HTTPException(status_code=400, detail="Output format must be a non-empty string")
-    
+
     format_str = format_str.lower().strip()
     if format_str not in allowed_formats:
         raise HTTPException(
@@ -505,28 +505,28 @@ def validate_output_format(format_str: str, allowed_formats: set) -> None:
 def validate_duration_per_slide(duration: Optional[float]) -> float:
     """
     Validate duration per slide parameter.
-    
+
     Args:
         duration: Duration value to validate
-        
+
     Returns:
         Validated duration value
-    
+
     Raises:
         HTTPException: If duration is invalid
     """
     if duration is None:
         return 3.0  # Default value
-    
+
     if not isinstance(duration, (int, float)):
         raise HTTPException(status_code=400, detail="Duration must be a number")
-    
+
     if duration <= 0:
         raise HTTPException(status_code=400, detail="Duration must be greater than 0")
-    
+
     if duration > 60:
         raise HTTPException(status_code=400, detail="Duration must be 60 seconds or less")
-    
+
     return float(duration)
 
 def cleanup_temp_dir(temp_dir: Path):
@@ -809,7 +809,7 @@ class HealthCache:
     def __init__(self, ttl_seconds: int = 30):
         self.cache = {}
         self.ttl = ttl_seconds
-    
+
     def get(self, key: str) -> Optional[dict]:
         if key in self.cache:
             result, timestamp = self.cache[key]
@@ -818,7 +818,7 @@ class HealthCache:
             else:
                 del self.cache[key]
         return None
-    
+
     def set(self, key: str, value: dict):
         self.cache[key] = (value, time.time())
 
@@ -847,15 +847,15 @@ def check_s3_health() -> dict:
     """Check S3 connectivity and accessibility"""
     try:
         start_time = time.time()
-        
+
         # Get S3 client
         s3_client = boto3.client('s3')
-        
+
         # List buckets to test connectivity
         response = s3_client.list_buckets()
-        
+
         latency_ms = int((time.time() - start_time) * 1000)
-        
+
         return {
             "status": HealthStatus.HEALTHY,
             "latency_ms": latency_ms,
@@ -877,31 +877,31 @@ def check_deepl_health() -> dict:
     try:
         api_keys = config_manager.get_api_keys()
         deepl_key = api_keys.get("deepl")
-        
+
         if not deepl_key:
             return {
                 "status": HealthStatus.UNHEALTHY,
                 "error": "DeepL API key not configured"
             }
-        
+
         # Check usage and limits
         headers = {"Authorization": f"DeepL-Auth-Key {deepl_key}"}
         response = requests.get("https://api-free.deepl.com/v2/usage", headers=headers, timeout=3)
-        
+
         if response.status_code == 200:
             usage_data = response.json()
             character_count = usage_data.get("character_count", 0)
             character_limit = usage_data.get("character_limit", 0)
-            
+
             remaining = character_limit - character_count if character_limit > 0 else None
-            
+
             # Consider degraded if less than 10% quota remaining
             if remaining is not None and character_limit > 0:
                 usage_percent = (character_count / character_limit) * 100
                 status = HealthStatus.DEGRADED if usage_percent > 90 else HealthStatus.HEALTHY
             else:
                 status = HealthStatus.HEALTHY
-            
+
             return {
                 "status": status,
                 "quota_used": character_count,
@@ -929,17 +929,17 @@ def check_openai_health() -> dict:
     try:
         api_keys = config_manager.get_api_keys()
         openai_key = api_keys.get("openai")
-        
+
         if not openai_key:
             return {
                 "status": HealthStatus.UNHEALTHY,
                 "error": "OpenAI API key not configured"
             }
-        
+
         # Test with a simple models list request
         headers = {"Authorization": f"Bearer {openai_key}"}
         response = requests.get("https://api.openai.com/v1/models", headers=headers, timeout=3)
-        
+
         if response.status_code == 200:
             return {"status": HealthStatus.HEALTHY}
         elif response.status_code == 401:
@@ -973,32 +973,32 @@ def check_elevenlabs_health() -> dict:
     try:
         api_keys = config_manager.get_api_keys()
         elevenlabs_key = api_keys.get("elevenlabs")
-        
+
         if not elevenlabs_key:
             return {
                 "status": HealthStatus.UNHEALTHY,
                 "error": "ElevenLabs API key not configured"
             }
-        
+
         # Test with user info endpoint
         headers = {"xi-api-key": elevenlabs_key}
         response = requests.get("https://api.elevenlabs.io/v1/user", headers=headers, timeout=3)
-        
+
         if response.status_code == 200:
             user_data = response.json()
             subscription = user_data.get("subscription", {})
             quota_used = subscription.get("character_count", 0)
             quota_limit = subscription.get("character_limit", 0)
-            
+
             remaining = quota_limit - quota_used if quota_limit > 0 else None
-            
+
             # Consider degraded if less than 10% quota remaining
             if remaining is not None and quota_limit > 0:
                 usage_percent = (quota_used / quota_limit) * 100
                 status = HealthStatus.DEGRADED if usage_percent > 90 else HealthStatus.HEALTHY
             else:
                 status = HealthStatus.HEALTHY
-            
+
             return {
                 "status": status,
                 "quota_used": quota_used,
@@ -1036,23 +1036,23 @@ def check_convertapi_health() -> dict:
     try:
         api_keys = config_manager.get_api_keys()
         convertapi_key = api_keys.get("convertapi")
-        
+
         if not convertapi_key:
             return {
                 "status": HealthStatus.UNHEALTHY,
                 "error": "ConvertAPI key not configured"
             }
-        
+
         # Test with a simple user info request
         response = requests.get(f"https://v2.convertapi.com/user?Secret={convertapi_key}", timeout=3)
-        
+
         if response.status_code == 200:
             user_data = response.json()
             seconds_left = user_data.get("SecondsLeft", 0)
-            
+
             # Consider degraded if less than 100 seconds remaining
             status = HealthStatus.DEGRADED if seconds_left < 100 else HealthStatus.HEALTHY
-            
+
             return {
                 "status": status,
                 "seconds_remaining": seconds_left
@@ -1081,14 +1081,14 @@ def check_convertapi_health() -> dict:
 @app.get("/health")
 async def health_check() -> Dict[str, Any]:
     """Enhanced health check endpoint with dependency monitoring"""
-    
+
     # Check cache first
     cached_result = health_cache.get("full_health")
     if cached_result:
         return cached_result
-    
+
     start_time = time.time()
-    
+
     # Define dependency checks
     dependency_checks = {
         "s3": check_s3_health,
@@ -1097,15 +1097,15 @@ async def health_check() -> Dict[str, Any]:
         "elevenlabs": check_elevenlabs_health,
         "convertapi": check_convertapi_health
     }
-    
+
     # Run all dependency checks concurrently with timeout
     dependencies = {}
     check_tasks = []
-    
+
     for service_name, check_func in dependency_checks.items():
         task = check_dependency_with_timeout(check_func, timeout=3.0)
         check_tasks.append((service_name, task))
-    
+
     # Wait for all checks to complete
     for service_name, task in check_tasks:
         try:
@@ -1116,26 +1116,26 @@ async def health_check() -> Dict[str, Any]:
                 "status": HealthStatus.UNHEALTHY,
                 "error": f"Check failed: {str(e)}"
             }
-    
+
     # Determine overall status
     overall_status = HealthStatus.HEALTHY
     unhealthy_count = 0
     degraded_count = 0
-    
+
     for service_name, result in dependencies.items():
         if result["status"] == HealthStatus.UNHEALTHY:
             unhealthy_count += 1
         elif result["status"] == HealthStatus.DEGRADED:
             degraded_count += 1
-    
+
     # Overall status logic
     if unhealthy_count > 0:
         overall_status = HealthStatus.DEGRADED if unhealthy_count <= 2 else HealthStatus.UNHEALTHY
     elif degraded_count > 0:
         overall_status = HealthStatus.DEGRADED
-    
+
     total_time = int((time.time() - start_time) * 1000)
-    
+
     result = {
         "status": overall_status,
         "version": "1.0.0",
@@ -1143,10 +1143,10 @@ async def health_check() -> Dict[str, Any]:
         "check_duration_ms": total_time,
         "dependencies": dependencies
     }
-    
+
     # Cache the result
     health_cache.set("full_health", result)
-    
+
     return result
 
 @app.post("/token")
@@ -1183,10 +1183,10 @@ async def translate_pptx(
     # Validate parameters
     validate_language_code(source_lang, is_target=False)
     validate_language_code(target_lang, is_target=True)
-    
+
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
-    
+
     task_id = create_task_id()
     temp_dir = get_temp_dir()
     input_dir = temp_dir / "input"
@@ -1199,7 +1199,7 @@ async def translate_pptx(
     for file in files:
         # Validate file extension
         validate_file_extension(file.filename, SUPPORTED_PPTX_EXTENSIONS)
-        
+
         # Validate file size
         validate_file_size(file, "pptx")
 
@@ -1244,10 +1244,10 @@ async def translate_text(
     # Validate parameters
     validate_language_code(source_lang, is_target=False)
     validate_language_code(target_lang, is_target=True)
-    
+
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
-    
+
     task_id = create_task_id()
     temp_dir = get_temp_dir()
     input_dir = temp_dir / "input"
@@ -1260,7 +1260,7 @@ async def translate_text(
     for file in files:
         # Validate file extension
         validate_file_extension(file.filename, SUPPORTED_TEXT_EXTENSIONS)
-        
+
         # Validate file size
         validate_file_size(file, "text")
 
@@ -1303,7 +1303,7 @@ async def transcribe_audio(
     """Transcribe audio files to text"""
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
-    
+
     task_id = create_task_id()
     temp_dir = get_temp_dir()
     input_dir = temp_dir / "input"
@@ -1317,7 +1317,7 @@ async def transcribe_audio(
     for file in files:
         # Validate file extension
         validate_file_extension(file.filename, SUPPORTED_AUDIO_EXTENSIONS)
-        
+
         # Validate file size
         validate_file_size(file, "audio")
 
@@ -1359,7 +1359,7 @@ async def convert_pptx(
     """Convert PPTX files to PDF, PNG, or WEBP"""
     # Validate parameters
     validate_output_format(output_format, SUPPORTED_CONVERSION_FORMATS)
-    
+
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
 
@@ -1375,7 +1375,7 @@ async def convert_pptx(
     for file in files:
         # Validate file extension
         validate_file_extension(file.filename, SUPPORTED_PPTX_EXTENSIONS)
-        
+
         # Validate file size
         validate_file_size(file, "pptx")
 
@@ -1426,7 +1426,7 @@ async def text_to_speech(
     for file in files:
         # Validate file extension
         validate_file_extension(file.filename, ['.txt'])
-        
+
         # Validate file size
         validate_file_size(file, "text")
 
@@ -1481,7 +1481,7 @@ async def merge_video(
         allowed_extensions = ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.gif',
                             '.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.wmv']
         validate_file_extension(file.filename, allowed_extensions)
-        
+
         # Validate file size (use general limit for mixed media)
         validate_file_size(file, "general")
 
@@ -1497,7 +1497,7 @@ async def merge_video(
         # Validate audio file extension
         audio_extensions = ['.mp3', '.wav', '.aac', '.m4a', '.flac', '.ogg']
         validate_file_extension(audio_file.filename, audio_extensions)
-        
+
         # Validate audio file size
         validate_file_size(audio_file, "audio")
 
@@ -1704,7 +1704,7 @@ class PPTXS3Request(BaseModel):
     output_prefix: Optional[str] = Field(None, description="Destination S3 prefix for translated files")
     source_lang: str = Field(..., description="Source language code (e.g., 'en')")
     target_lang: str = Field(..., description="Target language code (e.g., 'fr')")
-    
+
     @validator('input_keys')
     def validate_input_keys(cls, v):
         if not v or len(v) == 0:
@@ -1713,13 +1713,13 @@ class PPTXS3Request(BaseModel):
             if not key or not isinstance(key, str):
                 raise ValueError("Each input key must be a non-empty string")
         return v
-    
+
     @validator('source_lang')
     def validate_source_lang(cls, v):
         if v.lower().strip() not in VALID_SOURCE_LANGUAGES:
             raise ValueError(f"Invalid source language: {v}. Supported: {', '.join(sorted(VALID_SOURCE_LANGUAGES))}")
         return v.lower().strip()
-    
+
     @validator('target_lang')
     def validate_target_lang(cls, v):
         if v.lower().strip() not in VALID_TARGET_LANGUAGES:
@@ -1731,7 +1731,7 @@ class AudioS3Request(BaseModel):
     """Request model for transcribing audio files stored in S3."""
     input_keys: List[str] = Field(..., description="S3 object keys of the input audio files")
     output_prefix: Optional[str] = Field(None, description="Destination S3 prefix for transcription results")
-    
+
     @validator('input_keys')
     def validate_input_keys(cls, v):
         if not v or len(v) == 0:
@@ -1748,7 +1748,7 @@ class TextS3Request(BaseModel):
     output_prefix: Optional[str] = Field(None, description="Destination S3 prefix for translated files")
     source_lang: str = Field(..., description="Source language code (e.g., 'en')")
     target_lang: str = Field(..., description="Target language code (e.g., 'fr')")
-    
+
     @validator('input_keys')
     def validate_input_keys(cls, v):
         if not v or len(v) == 0:
@@ -1757,13 +1757,13 @@ class TextS3Request(BaseModel):
             if not key or not isinstance(key, str):
                 raise ValueError("Each input key must be a non-empty string")
         return v
-    
+
     @validator('source_lang')
     def validate_source_lang(cls, v):
         if v.lower().strip() not in VALID_SOURCE_LANGUAGES:
             raise ValueError(f"Invalid source language: {v}. Supported: {', '.join(sorted(VALID_SOURCE_LANGUAGES))}")
         return v.lower().strip()
-    
+
     @validator('target_lang')
     def validate_target_lang(cls, v):
         if v.lower().strip() not in VALID_TARGET_LANGUAGES:
@@ -1781,19 +1781,19 @@ class CourseS3Request(BaseModel):
     target_langs: List[str] = Field(..., description="List of target language codes")
     output_prefix: Optional[str] = Field(None, description="Optional root prefix for translated course (defaults to original 'contribute/')")
     use_english: bool = Field(False, description="If true, use already-translated English version as source instead of original language")
-    
+
     @validator('course_id')
     def validate_course_id(cls, v):
         if not v or not isinstance(v, str) or not v.strip():
             raise ValueError("course_id must be a non-empty string")
         return v.strip()
-    
+
     @validator('source_lang')
     def validate_source_lang(cls, v):
         if v.lower().strip() not in VALID_SOURCE_LANGUAGES:
             raise ValueError(f"Invalid source language: {v}. Supported: {', '.join(sorted(VALID_SOURCE_LANGUAGES))}")
         return v.lower().strip()
-    
+
     @validator('target_langs')
     def validate_target_langs(cls, v):
         if not v or len(v) == 0:
@@ -1807,7 +1807,7 @@ class TTSS3Request(BaseModel):
     """Request model for generating speech from TXT files stored in S3."""
     input_keys: List[str] = Field(..., description="S3 object keys of the input text files (.txt)")
     output_prefix: Optional[str] = Field(None, description="Destination S3 prefix for generated audio files")
-    
+
     @validator('input_keys')
     def validate_input_keys(cls, v):
         if not v or len(v) == 0:
@@ -1834,6 +1834,8 @@ class TTSTextRequest(BaseModel):
     output_key: str = Field(..., description="Destination S3 key (path + filename) for the generated MP3, e.g. 'audio/course/00.mp3'")
     voice_id: Optional[str] = Field(None, description="ElevenLabs voice_id to use (optional)")
     professors: Optional[List[ProfessorInfo]] = Field(None, description="List of professors for voice matching (used if voice_id not provided)")
+    # NEW: allow a simple string field when only a single professor name is supplied by the client
+    professor: Optional[str] = Field(None, description="Single professor name used to select voice (fallback when 'professors' list is not provided)")
 
 # --------------------------------------
 # Background runners for S3 workflows
@@ -2288,7 +2290,7 @@ async def run_tts_s3_async(task_id: str, input_keys: List[str], output_prefix: O
 # Background runner for direct Text -> Speech (upload to S3)
 # --------------------------------------
 
-async def run_tts_text_s3_async(task_id: str, text: str, output_key: str, voice_id: Optional[str], temp_dir: Path, professors: Optional[List[dict]] = None) -> None:
+async def run_tts_text_s3_async(task_id: str, text: str, output_key: str, voice_id: Optional[str], temp_dir: Path, professors: Optional[List[dict]] = None, professor_name: Optional[str] = None) -> None:
     """Generate audio from raw text and upload to S3 at *output_key*."""
 
     try:
@@ -2321,9 +2323,21 @@ async def run_tts_text_s3_async(task_id: str, text: str, output_key: str, voice_
         # Determine voice_id to use
         final_voice_id = voice_id
 
-        # If no voice_id provided, try professor voice matching
+        # (1) Try direct match from *professor_name* if supplied
+        if not final_voice_id and professor_name:
+            vid = tts.find_voice_by_name(professor_name)
+            if vid:
+                final_voice_id = vid
+                progress(f"Using professor name match: {final_voice_id}")
+
+        # (2) If no voice_id provided, try professor voice matching list (legacy workflow)
         if not final_voice_id and professors:
             voices_data = load_voices_data()
+            # If voices_data is empty, build a quick voice_map from live voices fetched above
+            if not voices_data:
+                voice_map_live = {v.get("name", "").lower(): v.get("voice_id") for v in tts.get_voices()}
+                voices_data = {"voice_map": voice_map_live}
+
             final_voice_id = select_voice_for_course(professors, voices_data)
             if final_voice_id:
                 progress(f"Using professor-matched voice: {final_voice_id}")
@@ -2366,10 +2380,10 @@ async def translate_pptx_s3(request: PPTXS3Request, background_tasks: Background
     for key in request.input_keys:
         if not validate_s3_path(key):
             raise HTTPException(status_code=400, detail=f"Invalid S3 path: {key}")
-    
+
     if request.output_prefix and not validate_s3_path(request.output_prefix):
         raise HTTPException(status_code=400, detail=f"Invalid S3 output prefix: {request.output_prefix}")
-    
+
     task_id = create_task_id()
     temp_dir = get_temp_dir()
     output_dir = temp_dir / "output"
@@ -2405,10 +2419,10 @@ async def transcribe_audio_s3(request: AudioS3Request, background_tasks: Backgro
     for key in request.input_keys:
         if not validate_s3_path(key):
             raise HTTPException(status_code=400, detail=f"Invalid S3 path: {key}")
-    
+
     if request.output_prefix and not validate_s3_path(request.output_prefix):
         raise HTTPException(status_code=400, detail=f"Invalid S3 output prefix: {request.output_prefix}")
-    
+
     task_id = create_task_id()
     temp_dir = get_temp_dir()
     output_dir = temp_dir / "output"
@@ -2451,10 +2465,10 @@ async def translate_text_s3(
     for key in request.input_keys:
         if not validate_s3_path(key):
             raise HTTPException(status_code=400, detail=f"Invalid S3 path: {key}")
-    
+
     if request.output_prefix and not validate_s3_path(request.output_prefix):
         raise HTTPException(status_code=400, detail=f"Invalid S3 output prefix: {request.output_prefix}")
-    
+
     task_id = create_task_id()
     temp_dir = get_temp_dir()
     output_dir = temp_dir / "output"
@@ -2592,6 +2606,7 @@ async def text_to_speech_text_s3(
             for prof in request.professors
         ]
 
+    # Pass the simple professor name as well (may be None)
     background_tasks.add_task(
         run_tts_text_s3_async,
         task_id,
@@ -2600,6 +2615,7 @@ async def text_to_speech_text_s3(
         request.voice_id,
         temp_dir,
         professors_data,
+        request.professor,  # <–– new arg
     )
 
     return TaskStatus(task_id=task_id, status="pending")
