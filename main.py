@@ -1,3 +1,4 @@
+import sys
 import tkinter as tk
 import convertapi
 from tkinter import ttk, filedialog, messagebox
@@ -22,7 +23,15 @@ from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.dml import MSO_THEME_COLOR, MSO_COLOR_TYPE
 from PIL import Image
+from pydub import AudioSegment
 from core.tool_descriptions import get_short_description, get_tool_info, get_quick_tips
+from core.transcription import AudioTranscriptionCore
+
+# Run migration if needed (before other initializations)
+try:
+    subprocess.run([sys.executable, "migrate_secret.py", "--auto"], check=False)
+except Exception:
+    pass  # Migration script might not exist or fail, continue anyway
 
 
 # --- Constants ---
@@ -32,50 +41,16 @@ API_KEYS_FILE = "api_keys.json"
 # --- Setup Logging ---
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-class ConfigManager:
-    """Manages configuration files for the application."""
-
-    def __init__(self, languages_file=SUPPORTED_LANGUAGES_FILE, api_keys_file=API_KEYS_FILE):
-        self.base_path = Path(__file__).resolve().parent
-        self.languages_file = self.base_path / languages_file
-        self.api_keys_file = self.base_path / api_keys_file
-
-        self.languages = self.load_json(self.languages_file)
-        self.api_keys = self.load_json(self.api_keys_file)
-
-    def load_json(self, file_path: Path):
-        """Loads JSON data from a file."""
-        try:
-            with open(file_path, "r") as f:
-                return json.load(f)
-        except FileNotFoundError:
-            logging.warning(f"Config file not found: {file_path}. Creating a default.")
-            return {}
-        except json.JSONDecodeError:
-            logging.error(f"Error decoding JSON from {file_path}. Please check the file for errors.")
-            return {}
-
-    def save_json(self, data, file_path: Path):
-        """Saves JSON data to a file."""
-        try:
-            with open(file_path, "w") as f:
-                json.dump(data, f, indent=4)
-        except Exception as e:
-            logging.error(f"Error saving to {file_path}: {e}")
-
-    def get_languages(self):
-        return self.languages
-
-
-    def get_api_keys(self):
-        return self.api_keys
-
-    def save_languages(self):
-        self.save_json(self.languages, self.languages_file)
-    
-    def save_api_keys(self):
-        """Saves the current API keys to the JSON file."""
-        self.save_json(self.api_keys, self.api_keys_file)
+# Import consolidated core modules
+from core.config import ConfigManager
+from core.services import ServiceManager, create_service_manager
+from core.processors import (
+    create_translation_processor, create_audio_processor, create_conversion_processor,
+    ProgressReporter, ProcessorConfig, ProcessingStatus
+)
+from core.task_manager import TaskManager, QueueProgressAdapter
+from core.validation import validate_file_size, validate_language_code
+from core.file_utils import should_skip_processing, get_file_size_mb
 
 class ToolBase:
     """Base class for all tools in the application."""
@@ -88,6 +63,12 @@ class ToolBase:
         self.input_paths = []
         self.output_path = None
         self.supported_languages = self.config_manager.get_languages()
+        
+        # Initialize service manager for consolidated API access
+        self.service_manager = create_service_manager(config_manager)
+        
+        # Create progress reporter for GUI
+        self.progress_reporter = ProgressReporter(callback=self.send_progress_update)
         
         # Add selection mode variable
         self.selection_mode = tk.StringVar(value="file")  # "file" or "folder"
@@ -307,11 +288,8 @@ class ToolBase:
         output_filename = input_file.stem + output_extension
         output_file = output_dir / output_filename
         
-        if output_file.exists():
-            self.send_progress_update(f"Skipping {input_file.name} - output already exists: {output_file.name}")
-            return True
-        
-        return False
+        # Use consolidated file_utils function
+        return should_skip_processing(input_file, output_file, check_exists=True)
 
     def handle_drop(self, event):
         """Handles drag and drop events."""
@@ -416,94 +394,24 @@ class LanguageSelectionMixin:
 class TextToSpeechTool(ToolBase):
     """
     Converts text files (.txt) to MP3 audio using the ElevenLabs API.
-    Detects voice name anywhere in the filename using the predefined voice list.
+    Uses TextToSpeechCore for the actual processing with filename-based voice selection.
     Voice name can be separated by underscore, hyphen, or space.
     """
 
     def __init__(self, master, config_manager, progress_queue):
         super().__init__(master, config_manager, progress_queue)
         self.supported_extensions = {'.txt'}
-        
-        # Constants for ElevenLabs API
-        self.ELEVENLABS_API_URL_BASE = "https://api.elevenlabs.io/v1"
-        self.TTS_ENDPOINT_TEMPLATE = "/text-to-speech/{voice_id}/stream"
-        self.VOICES_CONFIG_FILE = "elevenlabs_voices.json"
-        self.DEFAULT_MODEL = "eleven_multilingual_v2"
-        self.DEFAULT_VOICE_SETTINGS = {
-            "stability": 0.5,
-            "similarity_boost": 0.8,
-            "style": 0.0,
-            "use_speaker_boost": True
-        }
-        self.MAX_RETRIES = 3
-        self.RETRY_DELAY = 3  # seconds
-        
-        # Load voices configuration
-        self.voice_map = self._load_voices_config()
-        
-        # Get API key
-        self.api_key = self.config_manager.get_api_keys().get("elevenlabs")
-        if not self.api_key:
-            logging.warning("ElevenLabs API key not configured")
-
-    def _load_voices_config(self) -> dict:
-        """Loads the voice name to voice ID mapping from JSON config file."""
-        try:
-            with open(self.VOICES_CONFIG_FILE, 'r', encoding='utf-8') as f:
-                voices = json.load(f)
-                logging.info(f"Loaded {len(voices)} voice mappings from {self.VOICES_CONFIG_FILE}")
-                return voices
-        except FileNotFoundError:
-            logging.error(f"ElevenLabs voices config file not found at {self.VOICES_CONFIG_FILE}")
-            self.send_progress_update(f"ERROR: Voices config file missing: {self.VOICES_CONFIG_FILE}")
-            return {}
-        except json.JSONDecodeError as e:
-            logging.error(f"Error decoding JSON from {self.VOICES_CONFIG_FILE}: {e}")
-            self.send_progress_update(f"ERROR: Invalid JSON in voices config: {self.VOICES_CONFIG_FILE}")
-            return {}
-        except Exception as e:
-            logging.error(f"Unexpected error loading voices config: {e}", exc_info=True)
-            self.send_progress_update(f"ERROR: Failed to load voices config: {self.VOICES_CONFIG_FILE}")
-            return {}
-
-    def _parse_voicename(self, filename_stem: str):
-        """
-        Extracts voice name from the filename stem by looking for any matching voice name
-        from the voice_map regardless of its position in the filename.
-        """
-        if not self.voice_map:
-            return None
-            
-        # Split the filename by common delimiters
-        parts = re.split('[_\\- ]', filename_stem.lower())
-        
-        # Look for any part that matches a voice name (case-insensitive)
-        voice_names = {name.lower(): name for name in self.voice_map.keys()}
-        
-        for part in parts:
-            if part in voice_names:
-                return voice_names[part]  # Return the original case of the voice name
-                
-        return None
-
+        self.config_manager = config_manager
 
     def before_processing(self):
         """Pre-processing setup."""
-        if not self.api_key:
+        api_key = self.config_manager.get_api_keys().get("elevenlabs")
+        if not api_key:
             raise ValueError("ElevenLabs API key not configured. Please add your API key in the Configuration menu.")
-        
-        if not self.voice_map:
-            raise ValueError(f"Voice configuration missing or empty. Please check {self.VOICES_CONFIG_FILE}")
 
     def process_file(self, input_file: Path, output_dir: Path):
-        """Processes a single text file for TTS conversion."""
+        """Processes a single text file for TTS conversion using consolidated audio processor."""
         try:
-            # Check if should skip
-            if self.should_skip_file(input_file, output_dir, '.mp3'):
-                return
-            
-            self.send_progress_update(f"Processing {input_file.name}...")
-            
             # Check for interruption
             if self.stop_flag.is_set():
                 raise InterruptedError("Processing stopped by user")
@@ -511,40 +419,36 @@ class TextToSpeechTool(ToolBase):
             # Determine output path
             output_file = output_dir / f"{input_file.stem}.mp3"
             
-            # Parse voice name
-            voicename = self._parse_voicename(input_file.stem)
-            if not voicename:
-                error_msg = f"Could not parse voice name from filename '{input_file.name}'. Expected format: name_voicename.txt"
-                self.send_progress_update(f"ERROR: {error_msg}")
-                logging.error(error_msg)
-                return
+            # Create audio processor with GUI-specific progress reporter
+            progress_reporter = ProgressReporter(callback=lambda msg: (
+                self.send_progress_update(msg) if not self.stop_flag.is_set() 
+                else (_ for _ in ()).throw(InterruptedError("Processing stopped by user"))
+            ))
             
-            # Look up voice ID
-            voice_id = self.voice_map.get(voicename)
-            if not voice_id:
-                error_msg = (f"Could not find a valid voice name in filename '{input_file.name}'. "
-                            f"Filename must include one of these voices: {', '.join(sorted(self.voice_map.keys()))}")
-                self.send_progress_update(f"ERROR: {error_msg}")
-                logging.error(error_msg)
-                return
+            processor = create_audio_processor(
+                self.service_manager,
+                progress_reporter=progress_reporter,
+                config=ProcessorConfig(
+                    skip_existing=self.check_output_exists.get(),
+                    allowed_extensions={'.txt'},
+                    max_file_size_mb=10.0
+                )
+            )
             
-            self.send_progress_update(f"Using voice: {voicename} (ID: {voice_id[:6]}...)")
+            # Process the file using consolidated processor
+            result = processor.process_file(
+                input_file,
+                output_file,
+                operation='synthesize'
+            )
             
-            # Read text content
-            try:
-                text_to_speak = input_file.read_text(encoding='utf-8')
-                if not text_to_speak.strip():
-                    self.send_progress_update(f"Skipping {input_file.name}: File is empty")
-                    return
-            except Exception as e:
-                self.send_progress_update(f"ERROR: Failed to read {input_file.name}: {e}")
-                logging.error(f"Failed to read {input_file.name}: {e}", exc_info=True)
-                return
-            
-            # Generate audio
-            self._generate_audio(text_to_speak, voice_id, output_file)
-            
-            self.send_progress_update(f"Successfully generated audio: {output_file.name}")
+            if result.success:
+                self.send_progress_update(f"Successfully generated audio: {output_file.name}")
+            elif result.skipped:
+                # Skip message already sent by processor
+                pass
+            else:
+                self.send_progress_update(f"Failed to generate audio for: {input_file.name} - {result.message}")
             
         except InterruptedError:
             raise
@@ -552,77 +456,6 @@ class TextToSpeechTool(ToolBase):
             error_message = f"Error generating audio for {input_file.name}: {str(e)}"
             self.send_progress_update(error_message)
             logging.exception(error_message)
-
-    def _generate_audio(self, text: str, voice_id: str, output_file: Path) -> None:
-        """Generates audio using ElevenLabs API with retry mechanism."""
-        tts_url = f"{self.ELEVENLABS_API_URL_BASE}{self.TTS_ENDPOINT_TEMPLATE.format(voice_id=voice_id)}"
-        
-        headers = {
-            "Accept": "audio/mpeg",
-            "Content-Type": "application/json",
-            "xi-api-key": self.api_key
-        }
-        
-        payload = {
-            "text": text,
-            "model_id": self.DEFAULT_MODEL,
-            "voice_settings": self.DEFAULT_VOICE_SETTINGS
-        }
-        
-        for attempt in range(self.MAX_RETRIES):
-            # Check for interruption
-            if self.stop_flag.is_set():
-                raise InterruptedError("Processing stopped by user")
-            
-            try:
-                self.send_progress_update(f"Requesting audio generation (attempt {attempt + 1}/{self.MAX_RETRIES})...")
-                
-                response = requests.post(tts_url, headers=headers, json=payload, stream=True, timeout=180)
-                response.raise_for_status()
-                
-                # Save the audio stream
-                bytes_written = 0
-                output_file.parent.mkdir(parents=True, exist_ok=True)
-                
-                with open(output_file, "wb") as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if self.stop_flag.is_set():
-                            f.close()
-                            output_file.unlink(missing_ok=True)
-                            raise InterruptedError("Download stopped by user")
-                        
-                        if chunk:
-                            f.write(chunk)
-                            bytes_written += len(chunk)
-                
-                if bytes_written == 0:
-                    raise RuntimeError("Audio file was not saved correctly (0 bytes written)")
-                
-                return  # Success!
-                
-            except requests.exceptions.HTTPError as e:
-                status_code = e.response.status_code
-                try:
-                    error_details = e.response.json()
-                    error_message = error_details.get("detail", {}).get("message", str(e))
-                except:
-                    error_message = e.response.text or str(e)
-                
-                if status_code == 401:
-                    raise ValueError(f"Invalid ElevenLabs API key (Unauthorized): {error_message}")
-                elif status_code == 422:
-                    raise ValueError(f"Invalid request parameters: {error_message}")
-                elif status_code >= 500:
-                    self.send_progress_update(f"ElevenLabs server error: {error_message}. Retrying...")
-                else:
-                    raise ValueError(f"ElevenLabs API error ({status_code}): {error_message}")
-            
-            except (requests.exceptions.RequestException, RuntimeError) as e:
-                if attempt == self.MAX_RETRIES - 1:
-                    raise RuntimeError(f"Failed to generate audio after {self.MAX_RETRIES} attempts: {e}")
-                
-                self.send_progress_update(f"Network error: {e}. Retrying in {self.RETRY_DELAY} seconds...")
-                time.sleep(self.RETRY_DELAY)
 
 class PPTXTranslationTool(ToolBase, LanguageSelectionMixin):
     """Translates PPTX files from one language to another."""
@@ -715,246 +548,70 @@ class PPTXTranslationTool(ToolBase, LanguageSelectionMixin):
 
 
     def process_file(self, input_file: Path, output_dir: Path = None):
-        """Processes a single PPTX file."""
+        """Processes a single PPTX file using consolidated translation processor."""
         if input_file.suffix.lower() != ".pptx":
             self.send_progress_update(f"Skipping non-PPTX file: {input_file}")
             return
-        
-        # Check if should skip - PPTX files append target language before extension
-        output_filename = f"{input_file.stem}_{self.target_lang.get()}{input_file.suffix}"
-        if self.check_output_exists.get() and (output_dir / output_filename).exists():
-            self.send_progress_update(f"Skipping {input_file.name} - output already exists: {output_filename}")
-            return
 
         try:
-            self.send_progress_update(f"Translating {input_file.name}...")
-            output_file = self.translate_pptx(input_file, self.source_lang.get(), 
-                                            self.target_lang.get(), output_dir)
-            self.send_progress_update(f"Successfully translated: {output_file.name}")
+            # Check for interruption
+            if self.stop_flag.is_set():
+                raise InterruptedError("Processing stopped by user")
+                
+            # Create output filename with target language suffix
+            output_filename = f"{input_file.stem}_{self.target_lang.get()}{input_file.suffix}"
+            output_file = output_dir / output_filename
+            
+            # Create translation processor with GUI-specific progress reporter
+            progress_reporter = ProgressReporter(callback=lambda msg: (
+                self.send_progress_update(msg) if not self.stop_flag.is_set() 
+                else (_ for _ in ()).throw(InterruptedError("Processing stopped by user"))
+            ))
+            
+            processor = create_translation_processor(
+                self.service_manager,
+                progress_reporter=progress_reporter,
+                config=ProcessorConfig(
+                    skip_existing=self.check_output_exists.get(),
+                    allowed_extensions={'.pptx'},
+                    max_file_size_mb=50.0
+                )
+            )
+            
+            # Process the file using consolidated processor
+            result = processor.process_file(
+                input_file,
+                output_file,
+                source_language=self.source_lang.get(),
+                target_language=self.target_lang.get()
+            )
+            
+            if result.success:
+                self.send_progress_update(f"Successfully translated: {output_file.name}")
+            elif result.skipped:
+                # Skip message already sent by processor
+                pass
+            else:
+                self.send_progress_update(f"Failed to translate: {input_file.name} - {result.message}")
 
+        except InterruptedError:
+            raise
         except Exception as e:
             error_message = f"Error translating {input_file.name}: {e}"
             self.send_progress_update(error_message)
             logging.exception(error_message)
 
 
-    def translate_pptx(self, input_file: Path, source_lang: str, target_lang: str, output_dir: Path) -> Path:
-        """Translates a PPTX file using DeepL API."""
-        try:
-
-            # Get and validate API key
-            api_key = self.config_manager.get_api_keys().get("deepl")
-            if not api_key:
-                raise ValueError("DeepL API key not configured. Please add your API key in the Configuration menu.")
-
-            # Validate API key format
-            if not isinstance(api_key, str) or len(api_key.strip()) < 10:
-                raise ValueError("Invalid DeepL API key format. Please check your API key.")
-
-            translator = deepl.Translator(api_key.strip())
-
-            # Test API connection
-            try:
-                translator.get_usage()
-            except deepl.exceptions.AuthorizationException:
-                raise ValueError("Invalid DeepL API key. Please check your API key.")
-            except Exception as e:
-                raise ValueError(f"Error connecting to DeepL API: {str(e)}")
-
-            # Load the presentation
-            prs = Presentation(input_file)
-
-            # Track translation progress
-            total_shapes = sum(len(slide.shapes) for slide in prs.slides)
-            processed_shapes = 0
-
-            # Translate each shape with text
-            for slide_idx, slide in enumerate(prs.slides):
-                if self.stop_flag.is_set():
-                    raise InterruptedError("Processing stopped by user")
-                self.send_progress_update(f"Processing Slide {slide_idx + 1}/{len(prs.slides)}")
-                for shape_idx, shape in enumerate(slide.shapes):
-                    if self.stop_flag.is_set():
-                        raise InterruptedError("Processing stopped by user")
-
-                    # Check if shape has a text frame and text
-                    if not shape.has_text_frame or not shape.text_frame.text.strip():
-                        processed_shapes += 1
-                        continue # Skip shapes without text
-
-                    try:
-                        text_frame = shape.text_frame
-                        original_paras_data = []
-
-                        for para in text_frame.paragraphs:
-                            para_data = {
-                                'text': para.text,
-                                'alignment': para.alignment,
-                                'level': para.level,
-                                'line_spacing': para.line_spacing,
-                                'space_before': para.space_before,
-                                'space_after': para.space_after,
-                                'runs': []
-                            }
-
-                            for run in para.runs:
-                                font = run.font
-                                color_info = None
-                                if font.color and hasattr(font.color, 'type'): 
-                                    if font.color.type == MSO_COLOR_TYPE.RGB:
-                                        color_info = ('rgb', font.color.rgb)
-                                    elif font.color.type == MSO_COLOR_TYPE.SCHEME:
-                                        color_info = ('scheme', font.color.theme_color, getattr(font.color, 'brightness', 0.0))
-
-                                run_data = {
-                                    'text': run.text, 
-                                    'font_name': font.name,
-                                    'size': font.size,
-                                    'bold': font.bold,
-                                    'italic': font.italic,
-                                    'underline': font.underline,
-                                    'color_info': color_info, # Store the structured color info
-                                    'language': getattr(font, 'language_id', None) # Use getattr for safety
-                                }
-                                para_data['runs'].append(run_data)
-                            original_paras_data.append(para_data)
-
-                        # --- Translate the text ---
-                        original_full_text = text_frame.text # Get the full text once
-                        if not original_full_text.strip():
-                             processed_shapes += 1
-                             continue # Skip if effectively empty after stripping
-
-                        translated_text_obj = translator.translate_text(
-                            original_full_text,
-                            source_lang=source_lang,
-                            target_lang=target_lang
-                        )
-                        translated_full_text = translated_text_obj.text
-
-                        text_frame.clear() # Clear existing content
-
-
-                        translated_paras = translated_full_text.split('\n')
-                        num_orig_paras = len(original_paras_data)
-                        num_trans_paras = len(translated_paras)
-
-                        for i, trans_para_text in enumerate(translated_paras):
-                            # Determine which original paragraph's style to mimic
-                            orig_para_idx = min(i, num_orig_paras - 1)
-                            orig_para_data = original_paras_data[orig_para_idx]
-
-                            # Add paragraph (first one exists, add subsequent ones)
-                            if i == 0:
-                                p = text_frame.paragraphs[0]
-                                p.text = '' # Clear any default text in the first paragraph
-                            else:
-                                p = text_frame.add_paragraph()
-
-                            # Apply paragraph formatting
-                            p.alignment = orig_para_data['alignment']
-                            p.level = orig_para_data['level']
-                            if orig_para_data['line_spacing']: p.line_spacing = orig_para_data['line_spacing']
-                            if orig_para_data['space_before']: p.space_before = orig_para_data['space_before']
-                            if orig_para_data['space_after']: p.space_after = orig_para_data['space_after']
-
-                            # Apply run formatting - Distribute text and styles
-                            orig_runs_data = orig_para_data['runs']
-                            num_orig_runs = len(orig_runs_data)
-
-                            if not orig_runs_data: # If original paragraph had no runs (e.g., empty)
-                                p.text = trans_para_text # Just add the text
-                                continue
-
-                            # Simple distribution: Apply styles run-by-run, splitting translated text
-                            words = trans_para_text.split()
-                            total_words = len(words)
-                            start_idx = 0
-
-                            for j, run_data in enumerate(orig_runs_data):
-                                words_for_this_run = total_words // num_orig_runs
-                                if j < total_words % num_orig_runs:
-                                    words_for_this_run += 1
-
-                                end_idx = start_idx + words_for_this_run
-                                run_text = ' '.join(words[start_idx:end_idx])
-                                start_idx = end_idx
-
-                                if not run_text and j < num_orig_runs -1 : # Avoid adding empty runs unless it's the last one potentially
-                                    continue
-
-                                run = p.add_run()
-                                run.text = run_text + (' ' if j < num_orig_runs - 1 and run_text else '') # Add space between runs
-
-                                # Apply run formatting
-                                font = run.font
-                                if run_data['font_name']: font.name = run_data['font_name']
-                                if run_data['size']: font.size = run_data['size']
-                                # Explicitly set False if stored as False
-                                font.bold = run_data['bold'] if run_data['bold'] is not None else None
-                                font.italic = run_data['italic'] if run_data['italic'] is not None else None
-                                font.underline = run_data['underline'] if run_data['underline'] is not None else None # Check underline type if needed
-
-                                stored_color_info = run_data['color_info']
-                                if stored_color_info:
-                                    color_type, value1, *rest = stored_color_info
-                                    if color_type == 'rgb':
-                                        try:
-                                            font.color.rgb = RGBColor(*value1) # Pass tuple elements to RGBColor
-                                        except Exception as color_e:
-                                            self.send_progress_update(f"Warn: Failed to set RGB color {value1}: {color_e}")
-                                    elif color_type == 'scheme':
-                                        try:
-                                            font.color.theme_color = value1
-                                            if rest: # Brightness was stored
-                                                font.color.brightness = rest[0]
-                                        except Exception as color_e:
-                                             self.send_progress_update(f"Warn: Failed to set theme color {value1}: {color_e}")
-
-                                if run_data['language']: font.language_id = run_data['language']
-
-
-                    except InterruptedError:
-                        raise # Propagate stop request
-                    except Exception as e:
-                        self.send_progress_update(f"Error translating shape {shape_idx+1} on slide {slide_idx+1}: {e}")
-                        logging.warning(f"Error translating shape {shape_idx+1} on slide {slide_idx+1} in {input_file.name}: {e}", exc_info=True) # Log with traceback for debugging
-
-                    processed_shapes += 1
-                    if total_shapes > 0 and processed_shapes % 5 == 0: # Update progress more frequently
-                        progress = (processed_shapes / total_shapes) * 100
-                        self.send_progress_update(f"Translation progress: {progress:.1f}% ({processed_shapes}/{total_shapes} shapes)")
-
-
-            # Create output filename
-            output_file = output_dir / f"{input_file.stem}_{target_lang}{input_file.suffix}"
-
-            # Save the translated presentation
-            prs.save(output_file)
-            return output_file
-
-        except ImportError:
-            raise ImportError("Required libraries not installed. Please install python-pptx and deepl")
-        except InterruptedError:
-             self.send_progress_update(f"Translation stopped for {input_file.name}")
-             raise # Re-raise to stop processing loop
-        except Exception as e:
-            # Ensure specific error types from DeepL/pptx are caught if needed
-            raise Exception(f"Translation failed for {input_file.name}: {str(e)}")
-
-
 
 
 class AudioTranscriptionTool(ToolBase):
-    """Transcribes audio files using OpenAI's Whisper API."""
+    """Transcribes audio files using OpenAI's Whisper API via AudioTranscriptionCore."""
 
     def __init__(self, master, config_manager, progress_queue):
         super().__init__(master, config_manager, progress_queue)
         # Define supported extensions
         self.supported_extensions = {'.wav', '.mp3', '.m4a', '.webm', 
                                    '.mp4', '.mpga', '.mpeg'}
-        
-        self.MAX_SUPPORTED_AUDIO_SIZE_MB = 20
 
         # Get OpenAI API key from config
         self.api_key = self.config_manager.get_api_keys().get("openai")
@@ -962,85 +619,53 @@ class AudioTranscriptionTool(ToolBase):
             logging.warning("OpenAI API key not configured")
 
     def process_file(self, input_file: Path, output_dir: Path):
-        """Processes a single audio file."""
+        """Processes a single audio file using consolidated audio processor."""
         try:
-            # Check if should skip - audio transcripts append _transcript.txt
+            # Check if processing should stop
+            if self.stop_flag.is_set():
+                raise InterruptedError("Processing stopped by user")
+            
+            # Create output filename with transcript suffix
             output_filename = f"{input_file.stem}_transcript.txt"
-            if self.check_output_exists.get() and (output_dir / output_filename).exists():
-                self.send_progress_update(f"Skipping {input_file.name} - output already exists: {output_filename}")
-                return
-                
-            self.send_progress_update(f"Transcribing {input_file.name}...")
-            transcript = self.transcribe_audio(input_file, output_dir)
-            self.save_transcript(transcript, input_file, output_dir)
-            self.send_progress_update(f"Successfully transcribed: {input_file.name}")
+            output_path = output_dir / output_filename
+            
+            # Create audio processor with GUI-specific progress reporter
+            progress_reporter = ProgressReporter(callback=lambda msg: (
+                self.send_progress_update(msg) if not self.stop_flag.is_set() 
+                else (_ for _ in ()).throw(InterruptedError("Processing stopped by user"))
+            ))
+            
+            processor = create_audio_processor(
+                self.service_manager,
+                progress_reporter=progress_reporter,
+                config=ProcessorConfig(
+                    skip_existing=self.check_output_exists.get(),
+                    allowed_extensions=self.supported_extensions,
+                    max_file_size_mb=100.0
+                )
+            )
+            
+            # Process the file using consolidated processor
+            result = processor.process_file(
+                input_file,
+                output_path,
+                operation='transcribe'
+            )
+            
+            if result.success:
+                self.send_progress_update(f"Successfully transcribed: {input_file.name}")
+            elif result.skipped:
+                # Skip message already sent by processor
+                pass
+            else:
+                self.send_progress_update(f"Failed to transcribe: {input_file.name} - {result.message}")
 
+        except InterruptedError:
+            raise
         except Exception as e:
             error_message = f"Error transcribing {input_file.name}: {e}"
             self.send_progress_update(error_message)
             logging.exception(error_message)
-
-    def transcribe_audio(self, input_file: Path, output_dir: Path, max_retries=10, retry_delay=5):
-        """Transcribes an audio file using OpenAI's Whisper API."""
-        if not self.api_key:
-            raise ValueError("OpenAI API key not configured. Please add your API key in the Configuration menu.")
-
-        # Check file size and split if necessary
-        audio_files = self.prepare_audio_files(input_file, output_dir)
-        transcript_texts = []
-
-        for audio_file in audio_files:
-            for attempt in range(max_retries):
-                try:
-                    # Check if processing should stop
-                    if self.stop_flag.is_set():
-                        raise InterruptedError("Processing stopped by user")
-
-                    with open(audio_file, "rb") as f:
-                        client = openai.OpenAI(api_key=self.api_key)
-                        transcript = client.audio.transcriptions.create(
-                            model="whisper-1",
-                            file=f
-                        )
-                        transcript_texts.append(transcript.text)
-                        break
-                except Exception as e:
-                    if attempt == max_retries - 1:
-                        raise Exception(f"Transcription failed after {max_retries} attempts: {str(e)}")
-                    self.send_progress_update(f"Attempt {attempt + 1} failed: {str(e)}. Retrying...")
-                    time.sleep(retry_delay)
-
-            # Clean up temporary files if they were created
-            if audio_file != input_file:
-                audio_file.unlink()
-
-        return " ".join(transcript_texts)
-
-    def prepare_audio_files(self, input_file: Path, output_dir: Path) -> list:
-        """Prepares audio files for transcription, splitting if necessary."""
-        audio_size_mb = input_file.stat().st_size / (1024 * 1024)
-        
-        if audio_size_mb <= self.MAX_SUPPORTED_AUDIO_SIZE_MB:
-            return [input_file]
-
-        # Split audio file if it's too large
-        audio = AudioSegment.from_file(str(input_file))
-        chunk_size_ms = int((self.MAX_SUPPORTED_AUDIO_SIZE_MB * 1024 * 1024 * 8) / 1000)
-        duration_ms = len(audio)
-        
-        chunks = []
-        for i in range(0, duration_ms, chunk_size_ms):
-            chunk = audio[i:i + chunk_size_ms]
-            chunk_file = output_dir / f"{input_file.stem}_chunk_{i//chunk_size_ms}{input_file.suffix}"
-            chunk.export(str(chunk_file), format=input_file.suffix.lstrip('.'))
-            chunks.append(chunk_file)
-            
-        return chunks
-
-    def save_transcript(self, transcript: str, input_file: Path, output_dir: Path):
-        """Saves the transcript to a text file."""
-        output_file = output_dir / f"{input_file.stem}_transcript.txt"
-        output_file.write_text(transcript, encoding='utf-8')
 
 class TextTranslationTool(ToolBase, LanguageSelectionMixin):
     """Translates text files using DeepL API."""
@@ -1095,39 +720,47 @@ class TextTranslationTool(ToolBase, LanguageSelectionMixin):
         self.target_lang_combo.pack(side=tk.LEFT, padx=5)
 
     def process_file(self, input_file: Path, output_dir: Path):
-        """Processes a single text file."""
+        """Processes a single text file using consolidated translation processor."""
         try:
-            # Check if should skip - text files append target language before extension
-            output_filename = f"{input_file.stem}_{self.target_lang.get()}{input_file.suffix}"
-            if self.check_output_exists.get() and (output_dir / output_filename).exists():
-                self.send_progress_update(f"Skipping {input_file.name} - output already exists: {output_filename}")
-                return
-                
-            self.send_progress_update(f"Translating {input_file.name}...")
-            
             # Check for interruption
             if self.stop_flag.is_set():
                 raise InterruptedError("Processing stopped by user")
 
-            # Create output file path
+            # Create output filename with target language suffix
+            output_filename = f"{input_file.stem}_{self.target_lang.get()}{input_file.suffix}"
             output_file = output_dir / output_filename
-
-            # Read source file
-            with open(input_file, 'r', encoding='utf-8') as f:
-                source_text = f.read()
-
-            # Translate text
-            translated_text = self.translate_text(
-                source_text,
-                self.source_lang.get(),
-                self.target_lang.get()
+            
+            # Create translation processor with GUI-specific progress reporter
+            progress_reporter = ProgressReporter(callback=lambda msg: (
+                self.send_progress_update(msg) if not self.stop_flag.is_set() 
+                else (_ for _ in ()).throw(InterruptedError("Processing stopped by user"))
+            ))
+            
+            processor = create_translation_processor(
+                self.service_manager, 
+                progress_reporter=progress_reporter,
+                config=ProcessorConfig(
+                    skip_existing=self.check_output_exists.get(),
+                    allowed_extensions={'.txt'},
+                    max_file_size_mb=50.0
+                )
             )
-
-            # Save translated text
-            with open(output_file, 'w', encoding='utf-8') as f:
-                f.write(translated_text)
-
-            self.send_progress_update(f"Successfully translated: {input_file.name}")
+            
+            # Process the file using consolidated processor
+            result = processor.process_file(
+                input_file, 
+                output_file,
+                source_language=self.source_lang.get(),
+                target_language=self.target_lang.get()
+            )
+            
+            if result.success:
+                self.send_progress_update(f"Successfully translated: {input_file.name}")
+            elif result.skipped:
+                # Skip message already sent by processor
+                pass
+            else:
+                self.send_progress_update(f"Failed to translate: {input_file.name} - {result.message}")
 
         except InterruptedError:
             raise
@@ -1135,60 +768,6 @@ class TextTranslationTool(ToolBase, LanguageSelectionMixin):
             error_message = f"Error translating {input_file.name}: {str(e)}"
             self.send_progress_update(error_message)
             logging.exception(error_message)
-
-    def translate_text(self, text: str, source_lang: str, target_lang: str, max_retries=3, retry_delay=5) -> str:
-        """Translates text using DeepL API with retry mechanism."""
-        if not self.api_key:
-            raise ValueError("DeepL API key not configured. Please add your API key in the Configuration menu.")
-
-        if not text.strip():
-            return text
-
-        # Get language mappings from supported_languages.json
-        source_languages = self.supported_languages.get("source_languages", {})
-        target_languages = self.supported_languages.get("target_languages", {})
-
-        # Validate languages
-        if source_lang not in source_languages:
-            raise ValueError(f"Unsupported source language: {source_lang}")
-        if target_lang not in target_languages:
-            raise ValueError(f"Unsupported target language: {target_lang}")
-
-        translator = deepl.Translator(self.api_key.strip())
-
-        for attempt in range(max_retries):
-            # Check for interruption
-            if self.stop_flag.is_set():
-                raise InterruptedError("Processing stopped by user")
-
-            try:
-                # Test API connection on first attempt
-                if attempt == 0:
-                    try:
-                        translator.get_usage()
-                    except deepl.exceptions.AuthorizationException:
-                        raise ValueError("Invalid DeepL API key. Please check your API key.")
-                    except Exception as e:
-                        raise ValueError(f"Error connecting to DeepL API: {str(e)}")
-
-                # Perform translation
-                result = translator.translate_text(
-                    text,
-                    source_lang=source_lang,
-                    target_lang=target_lang
-                )
-                return result.text
-
-            except InterruptedError:
-                raise
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    self.send_progress_update(
-                        f"Translation attempt {attempt + 1} failed: {str(e)}. Retrying in {retry_delay} seconds..."
-                    )
-                    time.sleep(retry_delay)
-                else:
-                    raise Exception(f"Translation failed after {max_retries} attempts: {str(e)}")
 
     def before_processing(self):
         """Pre-processing setup."""
@@ -1233,123 +812,71 @@ class PPTXtoPDFTool(ToolBase):
         
         if not api_secret:
             raise ValueError("Missing ConvertAPI secret in configuration. Please configure it via the menu.")
-        
-        convertapi.api_credentials = api_secret
-        logging.info("ConvertAPI credentials loaded successfully.")
-
 
     def process_file(self, input_file: Path, output_dir: Path):
         """
-        Processes a single PPTX file.
-        Converts to PDF, PNG, or WEBP using ConvertAPI.
-        For PNG/WEBP output, files are renamed to use sequential numbering (00, 01, 02, etc.)
-        For WEBP output, first converts to PNG, then converts PNG to WEBP.
+        Processes a single PPTX file using consolidated conversion processor.
+        Converts to PDF, PNG, or WEBP with proper sequential naming.
         """
         try:
+            # Check for interruption
+            if self.stop_flag.is_set():
+                raise InterruptedError("Processing stopped by user")
+            
             output_format = self.output_format.get()
             
-            # Check if should skip based on output format
-            if self.check_output_exists.get():
-                skip = False
-                if output_format == 'pdf':
-                    output_file = output_dir / f"{input_file.stem}.pdf"
-                    if output_file.exists():
-                        self.send_progress_update(f"Skipping {input_file.name} - output already exists: {output_file.name}")
-                        skip = True
-                elif output_format in ['png', 'webp']:
-                    # Check if first slide exists (00 file)
-                    ext = '.png' if output_format == 'png' else '.webp'
-                    first_slide = output_dir / f"{input_file.stem}_00{ext}"
-                    if first_slide.exists():
-                        self.send_progress_update(f"Skipping {input_file.name} - output already exists: {first_slide.name}")
-                        skip = True
-                
-                if skip:
-                    return
-            
-            self.send_progress_update(f"Converting {input_file.name} to {output_format.upper()}...")
-
-            # Ensure output directory exists
-            output_dir.mkdir(parents=True, exist_ok=True)
-
-            # For WEBP, we need to convert to PNG first, then PNG to WEBP
-            if output_format == 'webp':
-                # Convert to PNG first
-                result = convertapi.convert(
-                    'png',
-                    {
-                        'File': str(input_file)
-                    },
-                    from_format='pptx'
-                )
-                
-                # Save PNG files temporarily
-                saved_files = result.save_files(str(output_dir))
-                saved_paths = [Path(f) for f in saved_files]
-                # Sort by creation time to maintain slide order
-                sorted_files = sorted(saved_paths, key=lambda x: x.stat().st_ctime)
-                
-                # Convert each PNG to WEBP
-                for idx, png_path in enumerate(sorted_files):
-                    # Create new WEBP filename with sequential numbering
-                    webp_name = f"{input_file.stem}_{idx:02d}.webp"
-                    webp_path = png_path.parent / webp_name
-                    
-                    # Convert PNG to WEBP using PIL
-                    self.send_progress_update(f"Converting slide {idx:02d} to WEBP...")
-                    with Image.open(png_path) as img:
-                        img.save(webp_path, 'WEBP', quality=85, method=6)
-                    
-                    # Remove the temporary PNG file
-                    png_path.unlink()
-                    
-                    self.send_progress_update(f"Saved slide {idx:02d}: {webp_name}")
+            # Determine output path based on format
+            if output_format == 'pdf':
+                output_file = output_dir / f"{input_file.stem}.pdf"
             else:
-                # Convert the file using the original format
-                result = convertapi.convert(
-                    output_format,
-                    {
-                        'File': str(input_file)
-                    },
-                    from_format='pptx'
+                # For image formats, the processor will handle multiple output files
+                output_file = output_dir / f"{input_file.stem}_slide_01.{output_format}"
+            
+            # Create conversion processor with GUI-specific progress reporter
+            progress_reporter = ProgressReporter(callback=lambda msg: (
+                self.send_progress_update(msg) if not self.stop_flag.is_set() 
+                else (_ for _ in ()).throw(InterruptedError("Processing stopped by user"))
+            ))
+            
+            processor = create_conversion_processor(
+                self.service_manager,
+                progress_reporter=progress_reporter,
+                config=ProcessorConfig(
+                    skip_existing=self.check_output_exists.get(),
+                    allowed_extensions=self.supported_extensions,
+                    output_formats=['pdf', 'png', 'webp'],
+                    max_file_size_mb=25.0
                 )
+            )
+            
+            # Process the file using consolidated processor
+            result = processor.process_file(
+                input_file,
+                output_file,
+                output_format=output_format
+            )
+            
+            if result.success:
+                self.send_progress_update(f"Successfully converted: {input_file.name}")
+                return True
+            elif result.skipped:
+                # Skip message already sent by processor
+                return True
+            else:
+                self.send_progress_update(f"Failed to convert: {input_file.name} - {result.message}")
+                return False
 
-                # Save the converted files
-                saved_files = result.save_files(str(output_dir))
-                
-                # For PNG output, rename files with sequential numbering
-                if output_format == 'png':
-                    # Get list of files and sort them by creation time
-                    saved_paths = [Path(f) for f in saved_files]
-                    # Sort by creation time to maintain slide order
-                    sorted_files = sorted(saved_paths, key=lambda x: x.stat().st_ctime)
-                    
-                    # Create new names with sequential numbering
-                    for idx, old_path in enumerate(sorted_files):
-                        new_name = f"{input_file.stem}_{idx:02d}.png"  # Use 02d for 2-digit padding
-                        new_path = old_path.parent / new_name
-                        
-                        # Rename the file
-                        old_path.rename(new_path)
-                        self.send_progress_update(f"Saved slide {idx:02d}: {new_name}")
-                else:
-                    # For PDF, just log the saved file
-                    for saved_file in saved_files:
-                        self.send_progress_update(f"Successfully saved: {Path(saved_file).name}")
-
-            return True
-
+        except InterruptedError:
+            raise
         except Exception as e:
             error_msg = f"Failed to convert {input_file.name}: {str(e)}"
             self.send_progress_update(f"ERROR: {error_msg}")
             logging.error(error_msg, exc_info=True)
             return False
 
-
     def after_processing(self):
         """Cleanup after processing batch."""
-        convertapi.api_credentials = None
-        self.send_progress_update("ConvertAPI conversion batch finished.")
+        self.send_progress_update("PPTX conversion batch finished.")
 
 class VideoMergeTool(ToolBase):
     """
@@ -2272,7 +1799,11 @@ class MainApp(TkinterDnD.Tk):
         self.geometry("800x600")
 
         # Initialize components
-        self.config_manager = ConfigManager()
+        self.config_manager = ConfigManager(
+            use_project_api_keys=True,
+            languages_file=SUPPORTED_LANGUAGES_FILE,
+            api_keys_file=API_KEYS_FILE
+        )
         self.progress_queue = queue.Queue()
 
         # Create UI

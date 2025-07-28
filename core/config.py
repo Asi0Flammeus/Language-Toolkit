@@ -14,12 +14,33 @@ Features:
     - Language support configuration
     - Default settings initialization
     - Cross-platform configuration directory handling
+    - Support for project-local language files
 """
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Dict, Any, Optional
+from dotenv import load_dotenv
+
+# Import file utilities for consistent file operations
+try:
+    from .file_utils import load_json_file, save_json_file
+except ImportError:
+    # Fallback for when file_utils is not available
+    def load_json_file(path, default=None, create_if_missing=False):
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return default if default is not None else {}
+    
+    def save_json_file(path, data, indent=4, ensure_ascii=False):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=indent, ensure_ascii=ensure_ascii)
+        return True
 
 logger = logging.getLogger(__name__)
 
@@ -53,12 +74,35 @@ class ConfigManager:
         config = ConfigManager(use_project_api_keys=True)
     """
     
-    def __init__(self, use_project_api_keys: bool = False):
+    def __init__(self, 
+                 use_project_api_keys: bool = False,
+                 languages_file: Optional[str] = None,
+                 api_keys_file: Optional[str] = None):
+        """
+        Initialize ConfigManager.
+        
+        Args:
+            use_project_api_keys: Use project-local api_keys.json instead of global config
+            languages_file: Project-local languages file (e.g., "supported_languages.json")
+            api_keys_file: Project-local API keys file (for backward compatibility)
+        """
         self.config = {}
         self.use_project_api_keys = use_project_api_keys
+        
+        # File paths
+        self.project_root = Path(__file__).parent.parent
         self.config_file = Path.home() / "Documents" / "Language Toolkit" / "config.json"
-        self.project_api_keys_file = Path(__file__).parent.parent / "api_keys.json"
+        self.project_api_keys_file = self.project_root / (api_keys_file or "api_keys.json")
+        self.project_languages_file = self.project_root / (languages_file or "supported_languages.json")
+        
+        # Ensure config directory exists
         self.config_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Load environment variables
+        env_path = self.project_root / ".env"
+        if env_path.exists():
+            load_dotenv(env_path)
+        
         self.load_config()
         
     def load_config(self):
@@ -116,12 +160,75 @@ class ConfigManager:
         except Exception as e:
             logging.error(f"Failed to save configuration: {e}")
     
-    def get_languages(self) -> list:
-        """Get list of supported languages."""
-        return self.config.get("languages", {}).get("supported", [])
+    def get_languages(self) -> Dict[str, Any]:
+        """
+        Get supported languages configuration.
+        
+        Tries project-local languages file first, then falls back to global config.
+        
+        Returns:
+            Dictionary with language configuration. Format depends on the source:
+            - Project file: Raw JSON content (e.g., {"source_languages": {...}, "target_languages": {...}})
+            - Global config: {"supported": [...]} format
+        """
+        # Try project-local languages file first
+        if self.project_languages_file.exists():
+            try:
+                languages = load_json_file(self.project_languages_file, default={})
+                if languages:
+                    logger.debug(f"Loaded languages from {self.project_languages_file}")
+                    return languages
+            except Exception as e:
+                logger.warning(f"Failed to load project languages file: {e}")
+        
+        # Fall back to global config
+        return self.config.get("languages", {})
+    
+    def save_languages(self, languages: Dict[str, Any]) -> None:
+        """
+        Save languages configuration.
+        
+        Args:
+            languages: Language configuration to save
+        """
+        if self.project_languages_file.parent.exists():
+            # Save to project-local file if project structure exists
+            try:
+                save_json_file(self.project_languages_file, languages)
+                logger.info(f"Saved languages to {self.project_languages_file}")
+                return
+            except Exception as e:
+                logger.warning(f"Failed to save to project languages file: {e}")
+        
+        # Fall back to global config
+        self.config["languages"] = languages
+        self.save_config()
+        logger.info("Saved languages to global config")
     
     def get_api_keys(self) -> Dict[str, str]:
-        """Get stored API keys."""
+        """Get stored API keys - prioritize .env over JSON files."""
+        api_keys = {}
+        
+        # First try to get keys from environment variables
+        env_mapping = {
+            "openai": "OPENAI_API_KEY",
+            "anthropic": "ANTHROPIC_API_KEY", 
+            "deepl": "DEEPL_API_KEY",
+            "convertapi": "CONVERTAPI_KEY",
+            "elevenlabs": "ELEVENLABS_API_KEY"
+        }
+        
+        for key, env_var in env_mapping.items():
+            env_value = os.getenv(env_var)
+            if env_value:
+                api_keys[key] = env_value
+        
+        # If we got keys from env, return them
+        if api_keys:
+            logger.info("Loaded API keys from environment variables")
+            return api_keys
+        
+        # Otherwise fall back to JSON files
         if self.use_project_api_keys:
             # Load API keys from project-local file
             try:
