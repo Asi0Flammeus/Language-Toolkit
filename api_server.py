@@ -23,7 +23,7 @@ from botocore.exceptions import ClientError, BotoCoreError
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import (BackgroundTasks, Depends, FastAPI, File, Form,
+from fastapi import (BackgroundTasks, Body, Depends, FastAPI, File, Form,
                      HTTPException, UploadFile)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
@@ -3379,6 +3379,262 @@ def select_voice_for_course(professors: List[dict], voices_data: dict) -> Option
 
     logger.info("No matching voices found for any course professors")
     return None
+
+# --------------------------------------
+# Reward Evaluator Endpoints
+# --------------------------------------
+class RewardEvaluationRequest(BaseModel):
+    """Request model for reward evaluation."""
+    file_path: Optional[str] = Field(None, description="Path to single file to evaluate")
+    folder_path: Optional[str] = Field(None, description="Path to folder to evaluate")
+    target_language: str = Field(..., description="Target language code (e.g., 'en', 'fr', 'es')")
+    reward_mode: str = Field(..., description="Reward mode: 'image', 'video', or 'txt'")
+    recursive: bool = Field(False, description="Whether to search folders recursively")
+
+@app.post("/reward/evaluate", response_model=Dict)
+async def evaluate_reward(request: RewardEvaluationRequest):
+    """
+    Evaluate reward for a single file or folder of files.
+    Supports PPTX files (image/video modes) and TXT files.
+    """
+    try:
+        from core.unified_reward_evaluator import UnifiedRewardEvaluator
+        evaluator = UnifiedRewardEvaluator()
+        
+        # Validate reward mode
+        if request.reward_mode not in ['image', 'video', 'txt']:
+            raise HTTPException(status_code=400, detail=f"Invalid reward mode: {request.reward_mode}")
+        
+        # Validate language
+        available_languages = evaluator.get_available_languages()
+        if request.target_language not in available_languages:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Language '{request.target_language}' not supported. Available: {available_languages}"
+            )
+        
+        # Process request
+        if request.file_path:
+            # Single file evaluation
+            result = evaluator.evaluate_file(
+                request.file_path,
+                request.target_language,
+                request.reward_mode
+            )
+            return {"results": [result]}
+            
+        elif request.folder_path:
+            # Folder evaluation
+            results = evaluator.evaluate_folder(
+                request.folder_path,
+                request.target_language,
+                request.reward_mode,
+                request.recursive
+            )
+            
+            # Add summary statistics
+            summary = evaluator.get_summary_stats(results)
+            return {
+                "results": results,
+                "summary": summary
+            }
+        else:
+            raise HTTPException(status_code=400, detail="Either file_path or folder_path must be provided")
+            
+    except Exception as e:
+        logger.error(f"Reward evaluation error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/reward/languages")
+async def get_reward_languages():
+    """Get list of supported languages for reward evaluation."""
+    try:
+        from core.unified_reward_evaluator import UnifiedRewardEvaluator
+        evaluator = UnifiedRewardEvaluator()
+        languages = evaluator.get_available_languages()
+        
+        # Get language factors for additional info
+        language_info = {}
+        for lang in languages:
+            if lang in evaluator.language_factors:
+                language_info[lang] = {
+                    "code": lang,
+                    "factor": evaluator.language_factors[lang]
+                }
+        
+        return {
+            "languages": languages,
+            "language_factors": language_info
+        }
+    except Exception as e:
+        logger.error(f"Error getting languages: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/reward/evaluate_s3", response_model=TaskStatus)
+async def evaluate_reward_s3(
+    background_tasks: BackgroundTasks,
+    s3_key: str = Body(..., description="S3 key of file or prefix of folder to evaluate"),
+    target_language: str = Body(..., description="Target language code"),
+    reward_mode: str = Body(..., description="Reward mode: 'image', 'video', or 'txt'"),
+    is_folder: bool = Body(False, description="Whether s3_key is a folder prefix"),
+    output_key: Optional[str] = Body(None, description="S3 key for output CSV file")
+):
+    """
+    Evaluate reward for files in S3. Returns a task ID for async processing.
+    Results are saved to S3 as a CSV file.
+    """
+    task_id = str(uuid.uuid4())
+    active_tasks[task_id] = {
+        "status": "pending",
+        "messages": [],
+        "result": None
+    }
+    
+    background_tasks.add_task(
+        run_reward_evaluation_s3_async,
+        task_id,
+        s3_key,
+        target_language,
+        reward_mode,
+        is_folder,
+        output_key
+    )
+    
+    return TaskStatus(task_id=task_id, status="pending")
+
+async def run_reward_evaluation_s3_async(
+    task_id: str,
+    s3_key: str,
+    target_language: str,
+    reward_mode: str,
+    is_folder: bool,
+    output_key: Optional[str]
+):
+    """Background task for S3 reward evaluation."""
+    temp_dir = None
+    try:
+        active_tasks[task_id]["status"] = "running"
+        
+        from core.unified_reward_evaluator import UnifiedRewardEvaluator
+        evaluator = UnifiedRewardEvaluator()
+        
+        s3 = S3ClientWrapper()
+        temp_dir = Path(tempfile.mkdtemp())
+        
+        def progress(msg: str):
+            active_tasks[task_id]["messages"].append(msg)
+            logger.info(f"Task {task_id}: {msg}")
+        
+        progress("Starting reward evaluation...")
+        
+        results = []
+        
+        if is_folder:
+            # List files in S3 folder
+            progress(f"Listing files in S3 folder: {s3_key}")
+            files = s3.list_files(s3_key)
+            
+            # Filter based on reward mode
+            if reward_mode == 'txt':
+                files = [f for f in files if f.lower().endswith('.txt')]
+            elif reward_mode in ['image', 'video']:
+                files = [f for f in files if f.lower().endswith(('.pptx', '.ppt'))]
+            
+            progress(f"Found {len(files)} files to evaluate")
+            
+            # Download and evaluate each file
+            for i, file_key in enumerate(files, 1):
+                progress(f"Processing file {i}/{len(files)}: {file_key}")
+                
+                # Download file
+                local_path = temp_dir / Path(file_key).name
+                s3.download_file(file_key, str(local_path))
+                
+                # Evaluate
+                result = evaluator.evaluate_file(
+                    str(local_path),
+                    target_language,
+                    reward_mode
+                )
+                result['file_key'] = file_key
+                results.append(result)
+                
+                # Clean up
+                local_path.unlink()
+                
+        else:
+            # Single file
+            progress(f"Downloading file: {s3_key}")
+            local_path = temp_dir / Path(s3_key).name
+            s3.download_file(s3_key, str(local_path))
+            
+            progress("Evaluating file...")
+            result = evaluator.evaluate_file(
+                str(local_path),
+                target_language,
+                reward_mode
+            )
+            result['file_key'] = s3_key
+            results.append(result)
+            
+            local_path.unlink()
+        
+        # Generate summary
+        summary = evaluator.get_summary_stats(results)
+        
+        # Create CSV output
+        progress("Creating CSV output...")
+        csv_path = temp_dir / "reward_evaluation_results.csv"
+        
+        import csv
+        with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
+            if results and not any('error' in r for r in results):
+                # Determine fieldnames based on mode
+                if reward_mode == 'txt':
+                    fieldnames = ['file_key', 'word_count', 'reward_euros']
+                else:
+                    fieldnames = ['file_key', 'total_slides', 'total_text_boxes', 
+                                'total_words', 'total_reward']
+                
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                
+                for result in results:
+                    row = {k: result.get(k, '') for k in fieldnames}
+                    writer.writerow(row)
+                
+                # Add summary row
+                writer.writerow({})  # Empty row
+                writer.writerow({'file_key': 'SUMMARY'})
+                writer.writerow({'file_key': f"Total Files: {summary['total_files']}"})
+                writer.writerow({'file_key': f"Total Reward: €{summary['total_reward']:.4f}"})
+                if 'average_reward' in summary:
+                    writer.writerow({'file_key': f"Average Reward: €{summary['average_reward']:.4f}"})
+        
+        # Upload CSV to S3
+        if not output_key:
+            timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+            output_key = f"reward_evaluations/{reward_mode}_{target_language}_{timestamp}.csv"
+        
+        progress(f"Uploading results to S3: {output_key}")
+        s3.upload_file(str(csv_path), output_key)
+        
+        active_tasks[task_id]["status"] = "completed"
+        active_tasks[task_id]["result"] = {
+            "output_key": output_key,
+            "summary": summary
+        }
+        active_tasks[task_id]["download_url"] = f"/download/{task_id}"
+        
+        progress(f"Evaluation complete. Results saved to: {output_key}")
+        
+    except Exception as e:
+        logger.error(f"Reward evaluation error: {e}")
+        active_tasks[task_id]["status"] = "failed"
+        active_tasks[task_id]["error"] = str(e)
+    finally:
+        if temp_dir and temp_dir.exists():
+            shutil.rmtree(temp_dir)
 
 if __name__ == "__main__":
     # Run the server
