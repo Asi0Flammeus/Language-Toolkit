@@ -97,8 +97,36 @@ pip install -r requirements.txt
 
 ## Usage
 
-1. Start the application:
+### Quick Start (Recommended)
+
+Use the provided startup scripts that automatically handle git updates, virtual environment activation, and dependency installation:
+
+**Linux/Mac:**
 ```bash
+./start_app.sh
+```
+
+**Windows:**
+```batch
+start_app.bat
+```
+
+These scripts will:
+1. Pull the latest changes from git
+2. Activate the virtual environment
+3. Update all dependencies from requirements.txt
+4. Start the application
+
+### Manual Start
+
+If you prefer to start the application manually:
+```bash
+# Activate virtual environment
+source venv/bin/activate  # Linux/Mac
+# or
+.\venv\Scripts\activate  # Windows
+
+# Start the application
 python main.py
 ```
 
