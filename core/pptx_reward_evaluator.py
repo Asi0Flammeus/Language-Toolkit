@@ -128,8 +128,8 @@ class PPTXRewardEvaluator:
         text_box_fee = 0.01 * image_factor  # Base fee adjusted by image factor
         
         # Apply formula: reward = delta * (words * diff_lang * euros_per_word + text_box_fee * nbr_text_box)
-        reward = delta * (
-            words * language_factor * self.euros_per_word + 
+        reward = delta * language_factor * (
+            words * self.euros_per_word + 
             text_box_fee * text_boxes
         )
         
