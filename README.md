@@ -130,17 +130,19 @@ source venv/bin/activate  # Linux/Mac
 python main.py
 ```
 
-2. Select the desired tool tab (PPTX Translation, Text Translation, or Audio Transcription)
+### Using the Application
 
-3. Choose processing mode:
+1. Select the desired tool tab (PPTX Translation, Text Translation, or Audio Transcription)
+
+2. Choose processing mode:
    - Single File: Process individual files
    - Folder (Recursive): Process all supported files in a directory and its subdirectories
 
-4. Select source and target languages (for translation tools)
+3. Select source and target languages (for translation tools)
 
-5. Choose input files/folder and output directory
+4. Choose input files/folder and output directory
 
-6. Click "Process" to start the operation
+5. Click "Process" to start the operation
 
 ## Supported File Types
 

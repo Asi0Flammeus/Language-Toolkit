@@ -8,9 +8,9 @@ git pull
 if [ -d "env" ]; then
     echo "Activating virtual environment..."
     source env/bin/activate
-elif [ -d "env" ]; then
+elif [ -d "venv" ]; then
     echo "Activating virtual environment..."
-    source env/bin/activate
+    source venv/bin/activate
 else
     echo "No virtual environment found. Please create one first."
     exit 1
@@ -18,7 +18,7 @@ fi
 
 # Update requirements
 echo "Updating requirements..."
-pip install -r requirements.txt
+pip install -q -r requirements.txt
 
 # Start the application
 echo "Starting the application..."

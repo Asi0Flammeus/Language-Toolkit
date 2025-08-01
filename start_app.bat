@@ -14,7 +14,7 @@ if exist "env\Scripts\activate.bat" (
 )
 
 echo Updating requirements...
-pip install -r requirements.txt
+pip install -q -r requirements.txt
 
 echo Starting the application...
 python main.py
