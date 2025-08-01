@@ -8,9 +8,9 @@ git pull
 if [ -d "env" ]; then
     echo "Activating virtual environment..."
     source env/bin/activate
-elif [ -d "venv" ]; then
+elif [ -d "env" ]; then
     echo "Activating virtual environment..."
-    source venv/bin/activate
+    source env/bin/activate
 else
     echo "No virtual environment found. Please create one first."
     exit 1
