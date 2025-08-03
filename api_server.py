@@ -9,19 +9,19 @@ import logging
 import os
 import queue
 import shutil
+import subprocess
 import tempfile
 import threading
+import time
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union, Callable, Tuple
-import subprocess
-import time
-import requests
-import boto3
-from botocore.exceptions import ClientError, BotoCoreError
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+import boto3
+import requests
 import uvicorn
+from botocore.exceptions import BotoCoreError, ClientError
 from dotenv import load_dotenv
 from fastapi import (BackgroundTasks, Body, Depends, FastAPI, File, Form,
                      HTTPException, UploadFile)
@@ -76,10 +76,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+import time
 # Simple in-memory rate limiting
 from collections import defaultdict
 from datetime import datetime
-import time
+
 
 class RateLimiter:
     def __init__(self, requests_per_minute: int = 60):
@@ -1957,6 +1958,10 @@ async def run_course_translation_s3_async(task_id: str, course_id: str, source_l
 
         api_keys = config_manager.get_api_keys()
         deepl_key = api_keys.get("deepl")
+        convertapi_key = api_keys.get("convertapi")
+        if not convertapi_key:
+            raise ValueError("ConvertAPI key not configured")
+
         if not deepl_key:
             raise ValueError("DeepL API key not configured")
 
@@ -1967,6 +1972,10 @@ async def run_course_translation_s3_async(task_id: str, course_id: str, source_l
         def progress(msg: str):
             active_tasks[task_id]["messages"].append(msg)
             logger.info(f"Task {task_id}: {msg}")
+        
+        # Convertisseur PPTX ➜ PNG (ConvertAPI)
+        from core.pptx_converter import PPTXConverterCore
+        converter = PPTXConverterCore(convertapi_key, progress)
 
         # List all pptx & txt keys under source_prefix
         keys = [k for k in s3.list_files(source_prefix, extensions=[".pptx", ".txt"]) if not Path(k).name.startswith('.')]
@@ -2003,7 +2012,7 @@ async def run_course_translation_s3_async(task_id: str, course_id: str, source_l
                 if len(parts) == 4 and parts[2] == 'text':
                     part_id, chapter_id, _, filename = parts
                     stem = Path(filename).stem
-                    slide_id_cache.setdefault((part_id, chapter_id, stem), uuid.uuid4().hex)
+                    slide_id_cache.setdefault((part_id, chapter_id, stem), str(uuid.uuid4()))
 
         # Download all files
         local_files = s3.download_files(keys, input_dir)
@@ -2049,7 +2058,7 @@ async def run_course_translation_s3_async(task_id: str, course_id: str, source_l
             else:  # len(parts)==4  unsplit original structure
                 if folder_type == 'text':
                     stem = Path(filename).stem
-                    slide_id = slide_id_cache.setdefault((part_id, chapter_id, stem), uuid.uuid4().hex)
+                    slide_id = slide_id_cache.setdefault((part_id, chapter_id, stem), str(uuid.uuid4()))
                     chapter_txts_unsplit[(part_id, chapter_id)].append((stem, slide_id, local_path))
                 elif folder_type == 'pptx' and filename.lower().endswith('.pptx'):
                     chapter_pptx_unsplit[(part_id, chapter_id)] = local_path
@@ -2101,6 +2110,17 @@ async def run_course_translation_s3_async(task_id: str, course_id: str, source_l
 
                     # Manifest
                     insert_manifest([course_id, target_lang, part_id, chapter_id, slide_id, 'pptx'], f"{stem}.pptx")
+
+                    local_png_out = output_dir / target_lang / part_id / chapter_id / slide_id / 'png' / f"{stem}.png"
+                    local_png_out.parent.mkdir(parents=True, exist_ok=True)
+                    png_files = converter.convert_pptx_to_png(slide_path, local_png_out.parent)
+                    if not png_files:
+                        raise RuntimeError(f"PNG conversion failed for {slide_path}")
+                    Path(png_files[0]).rename(local_png_out)
+
+                    target_png_key = f"{root_prefix}{course_id}/{target_lang}/{part_id}/{chapter_id}/{slide_id}/png/{stem}.png"
+                    s3._client.upload_file(str(local_png_out), s3.bucket, target_png_key)
+                    insert_manifest([course_id, target_lang, part_id, chapter_id, slide_id, 'png'], f"{stem}.png")
 
             # Process TXT files now (they are common to all langs)
             for (stem, slide_id, txt_local) in txt_entries:
