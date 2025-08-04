@@ -1024,6 +1024,8 @@ class VideoMergeTool(ToolBase):
             
     def process_directory(self, input_dir, output_dir):
         """Processes MP3/PNG pairs in either single-folder or recursive mode to create MP4 videos."""
+        from core.video_merger import VideoMergerCore
+        
         # Determine mode: flat (single folder) or recursive per subfolder
         if not getattr(self, 'recursive_mode', None) or not self.recursive_mode.get():
             self.send_progress_update(f"Processing single-folder mode: {input_dir}")
@@ -1118,14 +1120,27 @@ class VideoMergeTool(ToolBase):
                 mp3_dict[idx] = mp3_file
 
         # Match pairs by index
+        matched_png_indices = set()
+        
         for idx in sorted(mp3_dict.keys(), key=lambda x: int(x)):
             mp3_file = mp3_dict[idx]
             png_file = png_dict.get(idx)
             if png_file:
                 self.send_progress_update(f"Matched index {idx}: {mp3_file.name} + {png_file.name}")
                 file_pairs.append((idx, mp3_file, png_file))
+                matched_png_indices.add(idx)
             else:
                 self.send_progress_update(f"No PNG match for MP3 index {idx}: {mp3_file.name}")
+
+        # If outro is enabled, also include PNG files without MP3 matches
+        # These will use the outro audio
+        if self.use_outro.get():
+            for idx in sorted(png_dict.keys(), key=lambda x: int(x)):
+                if idx not in matched_png_indices:
+                    png_file = png_dict[idx]
+                    self.send_progress_update(f"PNG without MP3 match (will use outro): {png_file.name}")
+                    # Use None as placeholder for MP3 file
+                    file_pairs.append((idx, None, png_file))
 
         # Return pairs sorted by numeric index
         return sorted(file_pairs, key=lambda x: int(x[0]))
@@ -1133,154 +1148,42 @@ class VideoMergeTool(ToolBase):
     
     def create_video_with_ffmpeg(self, file_pairs, output_file):
         """
-        Create a video from matched MP3/PNG pairs using ffmpeg directly.
-        Handles adding silence between clips.
+        Create a video from matched MP3/PNG pairs using the VideoMergerCore.
+        Handles adding silence between clips and intro/outro.
         """
+        from core.video_merger import VideoMergerCore
+        
         try:
             # Check if should skip
             if self.check_output_exists.get() and output_file.exists():
                 self.send_progress_update(f"Skipping video creation - output already exists: {output_file.name}")
                 return
                 
-            # Create a temporary directory for intermediate files
-            temp_dir = output_file.parent / "temp_video_files"
-            temp_dir.mkdir(exist_ok=True)
+            # Create progress callback for the merger
+            def progress_callback(message):
+                if not self.stop_flag.is_set():
+                    self.send_progress_update(message)
+                else:
+                    raise InterruptedError("Processing stopped by user")
             
-            # List to store paths to intermediate segment files
-            segment_files = []
+            # Initialize video merger
+            merger = VideoMergerCore(progress_callback)
             
-            # Process each pair and create individual video segments
-            for idx, (numeric_id, mp3_file, png_file) in enumerate(file_pairs):
-                if self.stop_flag.is_set():
-                    self.send_progress_update("Processing stopped by user")
-                    return
-                
-                self.send_progress_update(f"Processing pair {idx+1}/{len(file_pairs)}: {numeric_id}")
-                
-                # Create segment file path
-                segment_file = temp_dir / f"segment_{idx:03d}.mp4"
-                segment_files.append(segment_file)
-                
-                # Check if this is the last slide and outro is enabled
-                is_last_slide = (idx == len(file_pairs) - 1)
-                audio_file = mp3_file
-                
-                if is_last_slide and self.use_outro.get():
-                    # Use outro audio for last slide
-                    if self.outro_path.exists():
-                        audio_file = self.outro_path
-                        self.send_progress_update(f"Using outro audio for last slide")
-                    else:
-                        self.send_progress_update(f"Warning: Outro file not found at {self.outro_path}, using original audio")
-                
-                # Run ffmpeg to create a video segment from image and audio
-                cmd = [
-                    'ffmpeg', '-y',
-                    '-loop', '1',
-                    '-i', str(png_file),
-                    '-i', str(audio_file),
-                    '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2',
-                    '-c:v', 'libx264',
-                    '-tune', 'stillimage',
-                    '-c:a', 'aac',
-                    '-b:a', '192k',
-                    '-pix_fmt', 'yuv420p',
-                    '-shortest',
-                    str(segment_file)
-                ]
-                
-                self.send_progress_update(f"Creating segment for pair {idx+1}...")
-                
-                result = subprocess.run(
-                    cmd, 
-                    stdout=subprocess.PIPE, 
-                    stderr=subprocess.PIPE, 
-                    text=True
-                )
-                
-                if result.returncode != 0:
-                    self.send_progress_update(f"Error creating segment {idx+1}: {result.stderr}")
-                    raise RuntimeError(f"ffmpeg error: {result.stderr}")
-                
-                # Add silence with the same image if not the last segment
-                if idx < len(file_pairs) - 1:
-                    silence_file = temp_dir / f"silence_{idx:03d}.mp4"
-                    segment_files.append(silence_file)
-                    
-                    # Create 0.5 second silence with the same image
-                    silence_cmd = [
-                        'ffmpeg', '-y',
-                        '-loop', '1',
-                        '-i', str(png_file),
-                        '-f', 'lavfi', 
-                        '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
-                        '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2',
-                        '-c:v', 'libx264',
-                        '-t', '0.2',  # 0.5 seconds
-                        '-c:a', 'aac',
-                        '-pix_fmt', 'yuv420p',
-                        str(silence_file)
-                    ]
-                    
-                    self.send_progress_update(f"Adding silence after segment {idx+1}...")
-                    
-                    silence_result = subprocess.run(
-                        silence_cmd, 
-                        stdout=subprocess.PIPE, 
-                        stderr=subprocess.PIPE, 
-                        text=True
-                    )
-                    
-                    if silence_result.returncode != 0:
-                        self.send_progress_update(f"Error creating silence {idx+1}: {silence_result.stderr}")
-                        raise RuntimeError(f"ffmpeg error: {silence_result.stderr}")
+            # Prepare intro/outro paths
+            intro_video = self.intro_path if self.use_intro.get() and self.intro_path.exists() else None
+            outro_audio = self.outro_path if self.use_outro.get() and self.outro_path.exists() else None
             
-            # Create a file list for concatenation
-            concat_file = temp_dir / "concat_list.txt"
-            with open(concat_file, 'w') as f:
-                # Add intro if enabled
-                if self.use_intro.get():
-                    if self.intro_path.exists():
-                        f.write(f"file '{self.intro_path.absolute()}'\n")
-                        self.send_progress_update("Including intro video")
-                    else:
-                        self.send_progress_update(f"Warning: Intro file not found at {self.intro_path}")
-                
-                # Add all video segments
-                for segment in segment_files:
-                    f.write(f"file '{segment.absolute()}'\n")
-            
-            # Concatenate all segments into final video
-            self.send_progress_update("Concatenating all segments...")
-            
-            concat_cmd = [
-                'ffmpeg', '-y',
-                '-f', 'concat',
-                '-safe', '0',
-                '-i', str(concat_file),
-                '-c', 'copy',
-                str(output_file)
-            ]
-            
-            concat_result = subprocess.run(
-                concat_cmd, 
-                stdout=subprocess.PIPE, 
-                stderr=subprocess.PIPE, 
-                text=True
+            # Use the new create_video_from_file_pairs method
+            success = merger.create_video_from_file_pairs(
+                file_pairs=file_pairs,
+                output_path=output_file,
+                silence_duration=0.2,  # 0.2 seconds silence between clips
+                intro_video=intro_video,
+                outro_audio=outro_audio
             )
             
-            if concat_result.returncode != 0:
-                self.send_progress_update(f"Error concatenating: {concat_result.stderr}")
-                raise RuntimeError(f"ffmpeg error: {concat_result.stderr}")
-            
-            self.send_progress_update(f"Successfully created video: {output_file}")
-            
-            # Clean up temporary files
-            self.send_progress_update("Cleaning up temporary files...")
-            for file in segment_files:
-                file.unlink(missing_ok=True)
-            concat_file.unlink(missing_ok=True)
-            temp_dir.rmdir()
+            if not success:
+                raise RuntimeError("Video creation failed")
             
         except Exception as e:
             error_msg = f"Error creating video: {str(e)}"

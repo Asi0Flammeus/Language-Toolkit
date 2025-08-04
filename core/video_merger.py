@@ -39,7 +39,7 @@ import os
 import re
 import mimetypes
 from pathlib import Path
-from typing import Optional, Callable, List, Dict, Any
+from typing import Optional, Callable, List, Dict, Any, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +105,10 @@ class VideoMergerCore:
     def create_video_from_files(self, input_dir: Path, output_path: Path, 
                                duration_per_slide: float = 3.0, 
                                audio_file: Optional[Path] = None,
-                               fade_duration: float = 0.5) -> bool:
+                               fade_duration: float = 0.5,
+                               intro_video: Optional[Path] = None,
+                               outro_audio: Optional[Path] = None,
+                               use_outro_for_last_slide: bool = False) -> bool:
         """
         Create video from images and optional audio.
         
@@ -115,6 +118,9 @@ class VideoMergerCore:
             duration_per_slide: Duration per slide in seconds
             audio_file: Optional audio file to add
             fade_duration: Fade transition duration in seconds
+            intro_video: Optional intro video to prepend
+            outro_audio: Optional outro audio to use for last slide
+            use_outro_for_last_slide: If True and outro_audio provided, use it for last slide
             
         Returns:
             True if successful, False otherwise
@@ -132,27 +138,106 @@ class VideoMergerCore:
             # Create video from images
             temp_video = output_path.parent / f"temp_{output_path.stem}.mp4"
             
-            success = self._create_video_from_images(
-                image_files, temp_video, duration_per_slide, fade_duration
-            )
+            # Handle outro audio for last slide if requested
+            actual_audio_file = audio_file
+            if use_outro_for_last_slide and outro_audio and outro_audio.exists() and image_files:
+                # Create a temporary video for all but the last image
+                if len(image_files) > 1:
+                    temp_video_main = output_path.parent / f"temp_main_{output_path.stem}.mp4"
+                    success = self._create_video_from_images(
+                        image_files[:-1], temp_video_main, duration_per_slide, fade_duration
+                    )
+                    if not success:
+                        return False
+                    
+                    # Create video for last image with outro audio
+                    temp_video_last = output_path.parent / f"temp_last_{output_path.stem}.mp4"
+                    success = self._create_video_from_images(
+                        [image_files[-1]], temp_video_last, duration_per_slide, fade_duration
+                    )
+                    if not success:
+                        return False
+                    
+                    # Add outro audio to last segment
+                    temp_video_last_audio = output_path.parent / f"temp_last_audio_{output_path.stem}.mp4"
+                    success = self._add_audio_to_video(temp_video_last, outro_audio, temp_video_last_audio)
+                    if not success:
+                        return False
+                    
+                    # Merge the two videos
+                    success = self.merge_videos([temp_video_main, temp_video_last_audio], temp_video)
+                    
+                    # Clean up temp files
+                    for f in [temp_video_main, temp_video_last, temp_video_last_audio]:
+                        if f.exists():
+                            f.unlink()
+                    
+                    if not success:
+                        return False
+                else:
+                    # Only one image, use outro audio directly
+                    actual_audio_file = outro_audio
+                    success = self._create_video_from_images(
+                        image_files, temp_video, duration_per_slide, fade_duration
+                    )
+                    if not success:
+                        return False
+            else:
+                # Standard processing without outro modification
+                success = self._create_video_from_images(
+                    image_files, temp_video, duration_per_slide, fade_duration
+                )
+                if not success:
+                    return False
             
-            if not success:
-                return False
+            # Now handle the final video composition
+            videos_to_concat = []
             
-            # Add audio if provided
-            if audio_file and audio_file.exists():
-                self.progress_callback("Adding audio track...")
-                success = self._add_audio_to_video(temp_video, audio_file, output_path)
+            # Add intro if provided
+            if intro_video and intro_video.exists():
+                if not self.validate_video_file(intro_video):
+                    self.progress_callback(f"Warning: Invalid intro video format: {intro_video}")
+                else:
+                    videos_to_concat.append(intro_video)
+                    self.progress_callback("Including intro video")
+            
+            # Add main video
+            videos_to_concat.append(temp_video)
+            
+            # If we have multiple videos to concatenate
+            if len(videos_to_concat) > 1:
+                self.progress_callback("Merging intro with main video...")
+                final_temp = output_path.parent / f"final_temp_{output_path.stem}.mp4"
+                success = self.merge_videos(videos_to_concat, final_temp)
+                
+                if success:
+                    # Add audio if provided and not already added
+                    if actual_audio_file and actual_audio_file.exists() and not use_outro_for_last_slide:
+                        self.progress_callback("Adding audio track...")
+                        success = self._add_audio_to_video(final_temp, actual_audio_file, output_path)
+                        if final_temp.exists():
+                            final_temp.unlink()
+                    else:
+                        final_temp.rename(output_path)
                 
                 # Clean up temp video
                 if temp_video.exists():
                     temp_video.unlink()
-                    
-                if not success:
-                    return False
             else:
-                # Just rename temp video to final output
-                temp_video.rename(output_path)
+                # No intro, just handle audio
+                if actual_audio_file and actual_audio_file.exists():
+                    self.progress_callback("Adding audio track...")
+                    success = self._add_audio_to_video(temp_video, actual_audio_file, output_path)
+                    
+                    # Clean up temp video
+                    if temp_video.exists():
+                        temp_video.unlink()
+                        
+                    if not success:
+                        return False
+                else:
+                    # Just rename temp video to final output
+                    temp_video.rename(output_path)
             
             self.progress_callback("Video creation completed successfully")
             return True
@@ -357,3 +442,185 @@ class VideoMergerCore:
     def get_supported_image_formats(self) -> List[str]:
         """Get list of supported image formats."""
         return ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.gif']
+    
+    def create_video_from_file_pairs(self, file_pairs: List[Tuple[str, Path, Path]], 
+                                    output_path: Path,
+                                    silence_duration: float = 0.2,
+                                    intro_video: Optional[Path] = None,
+                                    outro_audio: Optional[Path] = None) -> bool:
+        """
+        Create video from matched audio/image file pairs.
+        
+        This method is similar to the VideoMergeTool functionality, creating a video
+        from pairs of audio and image files with silence between segments.
+        
+        Args:
+            file_pairs: List of tuples (identifier, audio_path, image_path)
+            output_path: Path to output video file
+            silence_duration: Duration of silence between segments in seconds
+            intro_video: Optional intro video to prepend
+            outro_audio: Optional outro audio to replace last segment's audio
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        import tempfile
+        
+        try:
+            if not file_pairs:
+                raise ValueError("No file pairs provided")
+            
+            self.progress_callback(f"Creating video from {len(file_pairs)} file pairs")
+            
+            # Create temporary directory for segments
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_path = Path(temp_dir)
+                segment_files = []
+                
+                # Process each pair and create individual video segments
+                for idx, (identifier, audio_file, image_file) in enumerate(file_pairs):
+                    if not image_file.exists():
+                        raise FileNotFoundError(f"Missing image file for pair {identifier}")
+                    if audio_file and not audio_file.exists():
+                        raise FileNotFoundError(f"Missing audio file for pair {identifier}")
+                    
+                    self.progress_callback(f"Processing pair {idx+1}/{len(file_pairs)}: {identifier}")
+                    
+                    # Create segment file path
+                    segment_file = temp_path / f"segment_{idx:03d}.mp4"
+                    segment_files.append(segment_file)
+                    
+                    # Check if this is the last slide and outro is enabled
+                    is_last_slide = (idx == len(file_pairs) - 1)
+                    actual_audio_file = audio_file
+                    
+                    # Handle cases where there's no audio file (PNG without MP3 match)
+                    if not audio_file:
+                        if outro_audio and outro_audio.exists():
+                            actual_audio_file = outro_audio
+                            self.progress_callback(f"Using outro audio for PNG without MP3 (slide {idx+1} of {len(file_pairs)})")
+                        else:
+                            raise ValueError(f"No audio file for pair {identifier} and no outro audio provided")
+                    elif is_last_slide and outro_audio and outro_audio.exists():
+                        actual_audio_file = outro_audio
+                        self.progress_callback(f"Using outro audio for last slide (slide {idx+1} of {len(file_pairs)})")
+                    else:
+                        self.progress_callback(f"Using original audio for slide {idx+1} of {len(file_pairs)}")
+                    
+                    # Create video segment from image and audio
+                    cmd = [
+                        'ffmpeg', '-y',
+                        '-loop', '1',
+                        '-i', str(image_file),
+                        '-i', str(actual_audio_file),
+                        '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2',
+                        '-c:v', 'libx264',
+                        '-tune', 'stillimage',
+                        '-c:a', 'aac',
+                        '-b:a', '192k',
+                        '-ar', '44100',
+                        '-ac', '2',
+                        '-shortest',
+                        '-pix_fmt', 'yuv420p',
+                        str(segment_file)
+                    ]
+                    
+                    result = subprocess.run(cmd, capture_output=True, text=True)
+                    if result.returncode != 0:
+                        logger.error(f"FFmpeg error: {result.stderr}")
+                        raise RuntimeError(f"Failed to create segment {idx}")
+                    
+                    # Add silence segment between clips (except after last)
+                    if idx < len(file_pairs) - 1 and silence_duration > 0:
+                        silence_file = temp_path / f"silence_{idx:03d}.mp4"
+                        segment_files.append(silence_file)
+                        
+                        # Create silence with the same image
+                        silence_cmd = [
+                            'ffmpeg', '-y',
+                            '-loop', '1',
+                            '-i', str(image_file),
+                            '-f', 'lavfi', 
+                            '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
+                            '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2',
+                            '-c:v', 'libx264',
+                            '-t', str(silence_duration),
+                            '-c:a', 'aac',
+                            '-pix_fmt', 'yuv420p',
+                            str(silence_file)
+                        ]
+                        
+                        result = subprocess.run(silence_cmd, capture_output=True, text=True)
+                        if result.returncode != 0:
+                            logger.error(f"FFmpeg silence error: {result.stderr}")
+                
+                # Create concatenation list
+                concat_file = temp_path / "concat_list.txt"
+                with open(concat_file, 'w') as f:
+                    # Add intro if provided
+                    if intro_video and intro_video.exists():
+                        # Since the intro video has been fixed, we can use it directly
+                        # Just ensure it's compatible by re-encoding with same settings as other segments
+                        processed_intro = temp_path / "intro_processed.mp4"
+                        
+                        self.progress_callback("Processing intro video...")
+                        intro_cmd = [
+                            'ffmpeg', '-y',
+                            '-i', str(intro_video),
+                            '-c:v', 'libx264',  # Re-encode to ensure compatibility
+                            '-pix_fmt', 'yuv420p',  # Standard pixel format
+                            '-c:a', 'aac',  # Re-encode audio to ensure compatibility
+                            '-b:a', '192k',
+                            '-ar', '44100',
+                            '-ac', '2',
+                            '-map', '0:v:0',  # Map video stream
+                            '-map', '0:a:0?',  # Map audio stream if it exists
+                            str(processed_intro)
+                        ]
+                        
+                        result = subprocess.run(intro_cmd, capture_output=True, text=True)
+                        
+                        if result.returncode != 0:
+                            self.progress_callback("Warning: Failed to process intro video, using original")
+                            # Try to use the original intro video directly
+                            processed_intro = intro_video
+                            result.returncode = 0  # Reset to allow inclusion
+                        
+                        if processed_intro.exists() and result.returncode == 0:
+                            f.write(f"file '{processed_intro.absolute()}'\n")
+                            self.progress_callback("Including intro video")
+                        else:
+                            self.progress_callback("Warning: Could not include intro video")
+                    
+                    # Add all video segments
+                    self.progress_callback(f"Adding {len(segment_files)} segments to concatenation list")
+                    for i, segment in enumerate(segment_files):
+                        f.write(f"file '{segment.absolute()}'\n")
+                        self.progress_callback(f"Added segment {i+1}: {segment.name}")
+                
+                # Concatenate all segments into final video
+                self.progress_callback("Concatenating all segments...")
+                
+                # Use copy codec since all segments are now compatible
+                concat_cmd = [
+                    'ffmpeg', '-y',
+                    '-f', 'concat',
+                    '-safe', '0',
+                    '-i', str(concat_file),
+                    '-c', 'copy',
+                    str(output_path)
+                ]
+                
+                result = subprocess.run(concat_cmd, capture_output=True, text=True)
+                if result.returncode != 0:
+                    logger.error(f"FFmpeg concat error: {result.stderr}")
+                    raise RuntimeError("Failed to concatenate video segments")
+                
+                self.progress_callback("Video creation completed successfully")
+                return True
+                
+        except Exception as e:
+            error_msg = f"Failed to create video from file pairs: {e}"
+            logger.error(error_msg)
+            self.progress_callback(f"Error: {error_msg}")
+            return False

@@ -681,7 +681,10 @@ async def run_pptx_conversion_async(task_id: str, input_files: List[Path],
 
 async def run_video_merger_async(task_id: str, input_files: List[Path],
                                 output_dir: Path, duration_per_slide: float = 3.0,
-                                audio_file: Optional[Path] = None):
+                                audio_file: Optional[Path] = None,
+                                intro_video: Optional[Path] = None,
+                                outro_audio: Optional[Path] = None,
+                                use_outro_for_last_slide: bool = False):
     """Run video merger asynchronously"""
     try:
         # Update task status
@@ -718,7 +721,9 @@ async def run_video_merger_async(task_id: str, input_files: List[Path],
                         temp_img_path.write_bytes(img_file.read_bytes())
 
                     success = merger.create_video_from_files(
-                        temp_img_dir, output_file, duration_per_slide, audio_file
+                        temp_img_dir, output_file, duration_per_slide, audio_file,
+                        intro_video=intro_video, outro_audio=outro_audio,
+                        use_outro_for_last_slide=use_outro_for_last_slide
                     )
 
                     # Clean up temp directory
@@ -1464,9 +1469,12 @@ async def merge_video(
     duration_per_slide: Optional[float] = Form(3.0),
     files: List[UploadFile] = File(...),
     audio_file: Optional[UploadFile] = File(None),
+    intro_video: Optional[UploadFile] = File(None),
+    outro_audio: Optional[UploadFile] = File(None),
+    use_outro_for_last_slide: Optional[bool] = Form(False),
     token: str = Depends(verify_token)
 ):
-    """Create video from images or merge video files"""
+    """Create video from images or merge video files with optional intro/outro"""
     task_id = create_task_id()
     temp_dir = get_temp_dir()
     input_dir = temp_dir / "input"
@@ -1505,6 +1513,36 @@ async def merge_video(
         with open(audio_path, "wb") as f:
             content = await audio_file.read()
             f.write(content)
+    
+    # Save intro video if provided
+    intro_path = None
+    if intro_video and intro_video.filename:
+        # Validate video file extension
+        video_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.wmv']
+        validate_file_extension(intro_video.filename, video_extensions)
+        
+        # Validate file size
+        validate_file_size(intro_video, "general")
+        
+        intro_path = input_dir / intro_video.filename
+        with open(intro_path, "wb") as f:
+            content = await intro_video.read()
+            f.write(content)
+    
+    # Save outro audio if provided
+    outro_path = None
+    if outro_audio and outro_audio.filename:
+        # Validate audio file extension
+        audio_extensions = ['.mp3', '.wav', '.aac', '.m4a', '.flac', '.ogg']
+        validate_file_extension(outro_audio.filename, audio_extensions)
+        
+        # Validate file size
+        validate_file_size(outro_audio, "audio")
+        
+        outro_path = input_dir / outro_audio.filename
+        with open(outro_path, "wb") as f:
+            content = await outro_audio.read()
+            f.write(content)
 
     # Initialize task
     active_tasks[task_id] = {
@@ -1524,7 +1562,10 @@ async def merge_video(
         input_files,
         output_dir,
         duration_per_slide,
-        audio_path
+        audio_path,
+        intro_path,
+        outro_path,
+        use_outro_for_last_slide
     )
 
     return TaskStatus(task_id=task_id, status="pending", source_lang=None)
