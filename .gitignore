@@ -14,3 +14,4 @@ auth_tokens.json
 data/*
 # Security files
 client_credentials.json
+venv
