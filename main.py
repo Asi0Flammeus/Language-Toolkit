@@ -2053,10 +2053,10 @@ class MainApp(TkinterDnD.Tk):
         tool.update_input_display()
 
     def open_api_key_config(self):
-        """Opens a dialog to configure API keys, including Adobe Client ID/Secret."""
+        """Opens a dialog to configure API keys, including ConvertAPI key."""
         api_config_window = tk.Toplevel(self)
         api_config_window.title("API Key Configuration")
-        api_config_window.geometry("550x250") # Example adjusted size
+        api_config_window.geometry("550x220") # Adjusted for fewer fields
 
         api_keys = self.config_manager.get_api_keys()
         api_entries = {}
@@ -2065,18 +2065,15 @@ class MainApp(TkinterDnD.Tk):
             "openai",
             "deepl",
             "elevenlabs",
-            "adobe_client_id",      # Managed here
-            "adobe_client_secret"   # Managed here
+            "convertapi"      # Managed here
         ]
 
         for api_name in managed_api_names:
             frame = ttk.Frame(api_config_window)
             frame.pack(pady=5, padx=10, fill="x")
 
-            if api_name == "adobe_client_id":
-                label_text = "Adobe Client ID:"
-            elif api_name == "adobe_client_secret":
-                 label_text = "Adobe Client Secret:"
+            if api_name == "convertapi":
+                label_text = "ConvertAPI Key:"
             else:
                  label_text = f"{api_name.replace('_', ' ').title()} API Key:"
 
@@ -2107,7 +2104,7 @@ class MainApp(TkinterDnD.Tk):
         
         # Update the config_manager with new keys
         self.config_manager.api_keys = api_keys
-        self.config_manager.save_api_keys()
+        self.config_manager.save_api_keys(api_keys)
         
         # Update the API keys in existing tools
         if hasattr(self, 'text_to_speech_tool'):
