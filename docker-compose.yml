@@ -2,7 +2,9 @@ version: "3.8"
 
 services:
   api:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
     container_name: language-toolkit-api
     restart: unless-stopped
     ports:
@@ -10,10 +12,19 @@ services:
     volumes:
       - ./api_keys.json:/app/api_keys.json:ro
       - ./auth_tokens.json:/app/auth_tokens.json:ro
+      - ./client_credentials.json:/app/client_credentials.json:ro
       - ./logs:/app/logs
       - ./temp:/app/temp
+      - ./uploads:/app/uploads
     environment:
       - PYTHONPATH=/app
+      - PORT=8000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     env_file:
       - .env
     networks:
@@ -42,4 +53,3 @@ networks:
 volumes:
   logs:
   temp:
-
