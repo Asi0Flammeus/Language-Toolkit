@@ -22,6 +22,7 @@ python api_server.py
 
 ```bash
 cd ~/asi0-repos/language_toolkit/api-test-app
+npm install
 npm start
 ```
 
@@ -58,4 +59,3 @@ Press `Ctrl+C` in each terminal
 - First run will install dependencies (may take a few minutes)
 - Make sure your API keys are configured in `.env` file
 - Voice names must match those in `elevenlabs_voices.json`
-
