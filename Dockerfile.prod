@@ -54,7 +54,7 @@ COPY . .
 
 # Create necessary directories with proper permissions
 RUN mkdir -p /app/logs /app/temp /app/uploads && \
-    chmod 755 /app/logs /app/temp /app/uploads && \
+    chmod 777 /app/logs /app/temp /app/uploads && \
     chown -R appuser:appuser /app
 
 # Copy production configuration files

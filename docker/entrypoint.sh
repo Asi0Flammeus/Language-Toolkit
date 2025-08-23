@@ -3,8 +3,9 @@ set -e
 
 echo "Starting Language Toolkit API..."
 
-# Create necessary directories
-mkdir -p /app/logs /app/temp /app/uploads
+# Ensure directories exist and are writable
+mkdir -p /app/logs /app/temp /app/uploads || true
+chmod 777 /app/logs /app/temp /app/uploads || true
 
 # Start the application
 exec "$@"
