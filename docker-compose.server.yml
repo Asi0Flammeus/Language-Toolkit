@@ -6,9 +6,9 @@ services:
       context: .
       dockerfile: Dockerfile.prod
     container_name: language-toolkit
-    restart: unless-stopped
-    ports:
-      - "${PORT:-8000}:8000"
+    restart: always
+    expose:
+      - "8000"
     volumes:
       - ./logs:/app/logs
       - ./temp:/app/temp
@@ -23,6 +23,27 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    networks:
+      - app-network
+
+  nginx:
+    image: nginx:alpine
+    container_name: language-toolkit-nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - api
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
 
 volumes:
   logs:
