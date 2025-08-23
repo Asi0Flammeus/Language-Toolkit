@@ -876,6 +876,7 @@ def check_deepl_health() -> dict:
     try:
         api_keys = config_manager.get_api_keys()
         deepl_key = api_keys.get("deepl")
+        print(deepl_key)
 
         if not deepl_key:
             return {
@@ -883,9 +884,9 @@ def check_deepl_health() -> dict:
                 "error": "DeepL API key not configured"
             }
 
-        # Check usage and limits
+        # Check API key validity using usage endpoint (doesn't consume quota)
         headers = {"Authorization": f"DeepL-Auth-Key {deepl_key}"}
-        response = requests.get("https://api-free.deepl.com/v2/usage", headers=headers, timeout=3)
+        response = requests.get("https://api.deepl.com/v2/usage", headers=headers, timeout=5)
 
         if response.status_code == 200:
             usage_data = response.json()
@@ -906,6 +907,16 @@ def check_deepl_health() -> dict:
                 "quota_used": character_count,
                 "quota_limit": character_limit,
                 "quota_remaining": remaining
+            }
+        elif response.status_code == 403:
+            return {
+                "status": HealthStatus.UNHEALTHY,
+                "error": "DeepL API key invalid - check your API key configuration"
+            }
+        elif response.status_code == 456:
+            return {
+                "status": HealthStatus.DEGRADED,
+                "error": "DeepL quota exceeded"
             }
         else:
             return {
