@@ -1,9 +1,0 @@
-{
-  "tokens": [
-    "token_admin_abc123def456",
-    "token_user_xyz789uvw012",
-    "token_service_mno345pqr678"
-  ],
-  "description": "Whitelisted authentication tokens for API access",
-  "instructions": "Add new tokens to the 'tokens' array. Use strong, unique tokens for production."
-}

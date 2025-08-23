@@ -1,9 +1,0 @@
-{
-    "openai": "your-openai-api-key-here",
-    "anthropic": "your-anthropic-api-key-here",
-    "deepl": "your-deepl-api-key-here",
-    "convertapi": "your-convertapi-secret-here",
-    "elevenlabs": "your-elevenlabs-api-key-here",
-    "google": "your-google-api-key-here"
-}
-

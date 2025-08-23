@@ -34,13 +34,6 @@ from pydantic import BaseModel, Field, validator
 # Load environment variables from .env file
 load_dotenv()
 
-# Run migration if needed (before importing other modules)
-try:
-    import subprocess
-    subprocess.run([sys.executable, "migrate_secret.py", "--auto"], check=False)
-except Exception:
-    pass  # Migration script might not exist or fail, continue anyway
-
 # Import core functionality modules
 from core.config import ConfigManager
 from core.pptx_converter import PPTXConverterCore

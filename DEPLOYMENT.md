@@ -5,6 +5,7 @@ This guide provides complete instructions for deploying the Language Toolkit API
 ## 📋 Prerequisites
 
 ### Server Requirements
+
 - **OS**: Ubuntu 20.04+ or similar Linux distribution
 - **RAM**: Minimum 4GB (8GB+ recommended for heavy processing)
 - **Storage**: 20GB+ free space
@@ -12,6 +13,7 @@ This guide provides complete instructions for deploying the Language Toolkit API
 - **Network**: Public IP address and domain name
 
 ### Software Requirements
+
 - Docker 20.10+
 - Docker Compose 2.0+
 - Domain name pointing to your server's IP
@@ -39,7 +41,7 @@ sudo reboot
 
 ### 2. Copy Application Files
 
-Copy these files to your server in a directory (e.g., `/opt/language-toolkit/`):
+Clone the repo to your server in a directory (e.g., `/opt/language-toolkit/`):
 
 ```
 language-toolkit/
@@ -51,32 +53,19 @@ language-toolkit/
 ├── nginx.conf
 ├── deploy.sh
 ├── auth_tokens.json.example
-└── api_keys.json.example (create this)
+└── .env (create this)
 ```
 
-### 3. Configure API Keys
+### 3. Configure API Keys and Authentication
 
-Create `api_keys.json` with your actual API keys:
-
-```json
-{
-  "deepl": "your-deepl-api-key-here",
-  "openai": "your-openai-api-key-here", 
-  "elevenlabs": "your-elevenlabs-api-key-here",
-  "convertapi": "your-convertapi-key-here"
-}
-```
-
-### 4. Configure Authentication
-
-Copy and customize authentication tokens:
+Copy `.env.example` and edit it with your actual API keys and a secure JWT token.
 
 ```bash
-cp auth_tokens.json.example auth_tokens.json
-# Edit auth_tokens.json with secure tokens
+cp .env.example .env
+nano .env
 ```
 
-### 5. Deploy with Automated Script
+### 4. Deploy with Automated Script
 
 ```bash
 # Make script executable
@@ -87,6 +76,7 @@ chmod +x deploy.sh
 ```
 
 The script automatically:
+
 - ✅ Configures SSL certificates with Let's Encrypt
 - ✅ Sets up Nginx reverse proxy
 - ✅ Builds and starts Docker containers
@@ -154,6 +144,7 @@ After deployment:
 ## 📊 Monitoring & Management
 
 ### View Logs
+
 ```bash
 # All services
 docker-compose logs -f
@@ -164,6 +155,7 @@ docker-compose logs -f nginx
 ```
 
 ### Service Management
+
 ```bash
 # Restart services
 docker-compose restart
@@ -181,6 +173,7 @@ docker-compose up -d
 ```
 
 ### Check Service Status
+
 ```bash
 docker-compose ps
 ```
@@ -188,20 +181,26 @@ docker-compose ps
 ## 🔧 Configuration
 
 ### Rate Limiting
+
 Modify `nginx.conf` to adjust rate limits:
+
 ```nginx
 limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;
 limit_req_zone $binary_remote_addr zone=upload_limit:10m rate=2r/s;
 ```
 
 ### File Upload Limits
+
 Adjust in `nginx.conf`:
+
 ```nginx
 client_max_body_size 100M;  # Change as needed
 ```
 
 ### API Workers
+
 Modify `Dockerfile` CMD line:
+
 ```dockerfile
 CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "4", ...]
 ```
@@ -225,7 +224,9 @@ sudo firewall-cmd --reload
 ## 🔄 Automatic Updates
 
 ### SSL Certificate Renewal
+
 Automatically configured via cron:
+
 ```bash
 # Check current crontab
 crontab -l
@@ -235,7 +236,9 @@ sudo certbot renew --dry-run
 ```
 
 ### System Updates
+
 Consider setting up automatic security updates:
+
 ```bash
 sudo apt install unattended-upgrades
 sudo dpkg-reconfigure unattended-upgrades
@@ -246,38 +249,42 @@ sudo dpkg-reconfigure unattended-upgrades
 ### Common Issues
 
 1. **SSL Certificate Error**
+
    ```bash
    # Check certificate status
    sudo certbot certificates
-   
+
    # Manually renew
    sudo certbot renew
    docker-compose restart nginx
    ```
 
 2. **Service Won't Start**
+
    ```bash
    # Check logs
    docker-compose logs api
-   
+
    # Check configuration
    docker-compose config
    ```
 
 3. **API Keys Not Working**
+
    ```bash
    # Verify API keys file
-   cat api_keys.json
-   
+   cat .env
+
    # Restart API service
    docker-compose restart api
    ```
 
 4. **High Memory Usage**
+
    ```bash
    # Monitor resource usage
    docker stats
-   
+
    # Reduce worker count in Dockerfile
    --workers 2  # Instead of 4
    ```
@@ -301,12 +308,14 @@ docker-compose ps
 ### Production Tweaks
 
 1. **Increase Worker Processes**
+
    ```dockerfile
    # In Dockerfile, adjust based on CPU cores
    --workers 8  # 2x CPU cores
    ```
 
 2. **Add Redis Cache** (Optional)
+
    ```yaml
    # In docker-compose.yml
    redis:
@@ -327,9 +336,11 @@ docker-compose ps
 ## 🎉 Success!
 
 Your Language Toolkit API is now running in production with:
+
 - ✅ HTTPS encryption
 - ✅ Automatic SSL renewal
 - ✅ Security hardening
 - ✅ Rate limiting
 - ✅ Health monitoring
 - ✅ Log management
+
