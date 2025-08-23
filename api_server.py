@@ -876,7 +876,6 @@ def check_deepl_health() -> dict:
     try:
         api_keys = config_manager.get_api_keys()
         deepl_key = api_keys.get("deepl")
-        print(deepl_key)
 
         if not deepl_key:
             return {
@@ -990,31 +989,42 @@ def check_elevenlabs_health() -> dict:
                 "error": "ElevenLabs API key not configured"
             }
 
-        # Test with user info endpoint
-        headers = {"xi-api-key": elevenlabs_key}
-        response = requests.get("https://api.elevenlabs.io/v1/user", headers=headers, timeout=3)
+        # Test API key with models endpoint (recommended for authentication testing)
+        headers = {
+            "Content-Type": "application/json",
+            "xi-api-key": elevenlabs_key
+        }
+        response = requests.get("https://api.elevenlabs.io/v1/models", headers=headers, timeout=5)
 
         if response.status_code == 200:
-            user_data = response.json()
-            subscription = user_data.get("subscription", {})
-            quota_used = subscription.get("character_count", 0)
-            quota_limit = subscription.get("character_limit", 0)
+            # API key is valid, now get user info for quota details
+            user_response = requests.get("https://api.elevenlabs.io/v1/user", headers=headers, timeout=5)
+            
+            if user_response.status_code == 200:
+                user_data = user_response.json()
+                subscription = user_data.get("subscription", {})
+                quota_used = subscription.get("character_count", 0)
+                quota_limit = subscription.get("character_limit", 0)
 
-            remaining = quota_limit - quota_used if quota_limit > 0 else None
+                remaining = quota_limit - quota_used if quota_limit > 0 else None
 
-            # Consider degraded if less than 10% quota remaining
-            if remaining is not None and quota_limit > 0:
-                usage_percent = (quota_used / quota_limit) * 100
-                status = HealthStatus.DEGRADED if usage_percent > 90 else HealthStatus.HEALTHY
+                # Consider degraded if less than 10% quota remaining
+                if remaining is not None and quota_limit > 0:
+                    usage_percent = (quota_used / quota_limit) * 100
+                    status = HealthStatus.DEGRADED if usage_percent > 90 else HealthStatus.HEALTHY
+                else:
+                    status = HealthStatus.HEALTHY
+
+                return {
+                    "status": status,
+                    "quota_used": quota_used,
+                    "quota_limit": quota_limit,
+                    "quota_remaining": remaining
+                }
             else:
-                status = HealthStatus.HEALTHY
-
-            return {
-                "status": status,
-                "quota_used": quota_used,
-                "quota_limit": quota_limit,
-                "quota_remaining": remaining
-            }
+                # Models endpoint worked but user info failed - still healthy
+                return {"status": HealthStatus.HEALTHY}
+                
         elif response.status_code == 401:
             return {
                 "status": HealthStatus.UNHEALTHY,
