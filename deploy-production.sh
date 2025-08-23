@@ -39,9 +39,10 @@ chmod 777 logs temp uploads
 
 # Step 2: Build and start API
 echo -e "\n${YELLOW}Step 2: Building and starting API...${NC}"
-docker-compose down 2>/dev/null || true
-docker-compose build --no-cache
-docker-compose up -d
+# Use the simple docker-compose.yml (just API on port 8000)
+docker-compose -f docker-compose.yml down 2>/dev/null || true
+docker-compose -f docker-compose.yml build --no-cache
+docker-compose -f docker-compose.yml up -d
 
 # Wait for API to start
 echo -n "Waiting for API to start"
