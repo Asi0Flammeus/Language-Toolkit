@@ -20,33 +20,21 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir gunicorn
+    pip install --no-cache-dir gunicorn uvicorn[standard]
 
 # Copy application code
 COPY . .
 
-# Create directories with proper permissions
-# Using 777 for volumes that will be mounted from host
+# Create directories with full permissions
 RUN mkdir -p /app/logs /app/temp /app/uploads && \
-    chmod 777 /app/logs /app/temp /app/uploads
-
-# Copy production configuration files
-COPY docker/gunicorn.conf.py /app/gunicorn.conf.py
-COPY docker/entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
-
-# Note: Running as root for now to avoid permission issues with mounted volumes
-# In a production environment with proper volume management, you should use:
-# RUN groupadd -r appuser && useradd -r -g appuser appuser
-# USER appuser
+    chmod -R 777 /app/logs /app/temp /app/uploads
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:${PORT}/health || exit 1
+    CMD curl -f http://localhost:8000/health || exit 1
 
 # Expose port
-EXPOSE ${PORT}
+EXPOSE 8000
 
-# Run the application
-ENTRYPOINT ["/app/entrypoint.sh"]
-CMD ["gunicorn", "--config", "/app/gunicorn.conf.py", "api_server:app"]
+# Simple direct command (no entrypoint complexity)
+CMD ["gunicorn", "api_server:app", "--bind", "0.0.0.0:8000", "--worker-class", "uvicorn.workers.UvicornWorker", "--workers", "4", "--timeout", "300", "--access-logfile", "-", "--error-logfile", "-"]
