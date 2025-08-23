@@ -3,6 +3,7 @@
 ## Two Ways to Deploy
 
 ### 1️⃣ Local/Testing (No domain needed)
+
 ```bash
 # Just run this one command:
 ./deploy.sh
@@ -44,7 +45,6 @@ AWS_ACCESS_KEY_ID=...
 AWS_SECRET_ACCESS_KEY=...
 S3_BUCKET=my-bucket
 
-# That's it! Everything else has smart defaults
 ```
 
 ## Useful Commands
@@ -55,5 +55,3 @@ docker-compose restart      # Restart
 docker-compose down         # Stop
 ```
 
----
-**That's ALL! No complex configuration. Just deploy and go.**
