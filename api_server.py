@@ -847,8 +847,33 @@ def check_s3_health() -> dict:
     try:
         start_time = time.time()
 
-        # Get S3 client
-        s3_client = boto3.client('s3')
+        # Get custom S3 configuration from environment
+        s3_endpoint = os.getenv("S3_ENDPOINT")
+        s3_access_key = os.getenv("S3_ACCESS_KEY")
+        s3_secret_key = os.getenv("S3_SECRET_KEY")
+        s3_region = os.getenv("S3_REGION")
+        s3_bucket = os.getenv("S3_BUCKET")
+        
+        if not s3_access_key or not s3_secret_key:
+            return {
+                "status": HealthStatus.UNHEALTHY,
+                "error": "S3 credentials not configured (S3_ACCESS_KEY/S3_SECRET_KEY missing)"
+            }
+        
+        # Configure boto3 client with custom endpoint and credentials
+        client_config = {
+            'aws_access_key_id': s3_access_key,
+            'aws_secret_access_key': s3_secret_key,
+        }
+        
+        if s3_region:
+            client_config['region_name'] = s3_region
+            
+        if s3_endpoint:
+            client_config['endpoint_url'] = s3_endpoint
+        
+        # Get S3 client with custom configuration
+        s3_client = boto3.client('s3', **client_config)
 
         # List buckets to test connectivity
         response = s3_client.list_buckets()
@@ -858,7 +883,8 @@ def check_s3_health() -> dict:
         return {
             "status": HealthStatus.HEALTHY,
             "latency_ms": latency_ms,
-            "buckets_accessible": len(response.get('Buckets', []))
+            "buckets_accessible": len(response.get('Buckets', [])),
+            "endpoint": s3_endpoint if s3_endpoint else "AWS S3"
         }
     except (ClientError, BotoCoreError) as e:
         return {
