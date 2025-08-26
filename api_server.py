@@ -156,24 +156,40 @@ SUPPORTED_VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", "
 SUPPORTED_CONVERSION_FORMATS = {"pdf", "png", "webp"}
 
 def load_client_credentials() -> Dict[str, str]:
-    """Load allowed client_id -> client_secret mapping from client_credentials.json
-    This avoids the need for a database while still supporting credential rotation.
+    """Load allowed client_id -> client_secret mapping from environment variables.
+    Supports multiple clients by using CLIENT_ID_1, CLIENT_SECRET_1, CLIENT_ID_2, CLIENT_SECRET_2, etc.
+    Also supports a single client with CLIENT_ID and CLIENT_SECRET.
     """
     credentials: Dict[str, str] = {}
-    cred_file = Path(__file__).parent / "client_credentials.json"
+    
     try:
-        if cred_file.exists():
-            with open(cred_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                for entry in data.get("clients", []):
-                    cid = entry.get("client_id")
-                    csec = entry.get("client_secret")
-                    if cid and csec:
-                        credentials[cid] = csec
-        else:
-            logger.warning(f"Client credentials file not found: {cred_file}")
+        # Check for single client credentials
+        single_client_id = os.getenv("CLIENT_ID")
+        single_client_secret = os.getenv("CLIENT_SECRET")
+        
+        if single_client_id and single_client_secret:
+            credentials[single_client_id] = single_client_secret
+            logger.info(f"Loaded single client credentials from environment")
+        
+        # Check for multiple clients (CLIENT_ID_1, CLIENT_SECRET_1, etc.)
+        index = 1
+        while True:
+            client_id = os.getenv(f"CLIENT_ID_{index}")
+            client_secret = os.getenv(f"CLIENT_SECRET_{index}")
+            
+            if not client_id or not client_secret:
+                break
+                
+            credentials[client_id] = client_secret
+            logger.info(f"Loaded client credentials {index} from environment")
+            index += 1
+        
+        if not credentials:
+            logger.warning("No client credentials found in environment variables. Authentication may be disabled.")
+            logger.info("Set CLIENT_ID and CLIENT_SECRET, or CLIENT_ID_1 and CLIENT_SECRET_1, etc. in .env file")
     except Exception as exc:
-        logger.error(f"Failed to load client credentials: {exc}")
+        logger.error(f"Failed to load client credentials from environment: {exc}")
+    
     return credentials
 
 CLIENT_CREDENTIALS = load_client_credentials()

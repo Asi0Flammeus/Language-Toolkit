@@ -150,6 +150,34 @@ python main.py
 - Text Translation: `.txt`
 - Audio Transcription: `.wav`, `.mp3`, `.m4a`, `.webm`, `.mp4`, `.mpga`, `.mpeg`
 
+## API Server
+
+The Language Toolkit includes a FastAPI server that provides REST API endpoints for all tools.
+
+### Quick Start
+
+1. Configure your `.env` file with API keys and authentication credentials (see `.env.example`)
+
+2. Start the server:
+```bash
+python api_server.py
+```
+
+3. The API will be available at `http://localhost:8000`
+   - API documentation: `http://localhost:8000/docs`
+   - Health check: `http://localhost:8000/health`
+
+### Authentication
+
+The API uses JWT-based authentication. See [README_AUTH.md](README_AUTH.md) for detailed authentication setup and usage.
+
+### Documentation
+
+- [API Documentation](README_API.md) - Complete API endpoints reference
+- [Authentication Guide](README_AUTH.md) - Authentication setup and examples
+- [Docker Deployment](README_DOCKER.md) - Docker deployment instructions
+- [Testing Guide](README_TESTING.md) - API testing documentation
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.

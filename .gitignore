@@ -15,3 +15,4 @@ data/*
 # Security files
 client_credentials.json
 venv
+
