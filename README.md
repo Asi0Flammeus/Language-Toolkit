@@ -21,6 +21,40 @@ A Python-based GUI application for managing various language-related tasks, incl
 
 ## Installation
 
+### macOS
+
+1. Install Homebrew (if not already installed):
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+2. Install Git:
+```bash
+brew install git
+```
+
+3. Install Python 3.8+:
+```bash
+brew install python@3.11
+```
+
+4. Clone the repository:
+```bash
+git clone https://github.com/Asi0Flammeus/Language-Toolkit.git
+cd Language-Toolkit
+```
+
+5. Create and activate a virtual environment:
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+6. Install required packages:
+```bash
+pip install -r requirements.txt
+```
+
 ### Windows
 
 1. Install Python 3.8+ from [python.org](https://www.python.org/downloads/)
