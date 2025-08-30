@@ -27,12 +27,6 @@ from pydub import AudioSegment
 from core.tool_descriptions import get_short_description, get_tool_info, get_quick_tips
 from core.transcription import AudioTranscriptionCore
 
-# Run migration if needed (before other initializations)
-try:
-    subprocess.run([sys.executable, "migrate_secret.py", "--auto"], check=False)
-except Exception:
-    pass  # Migration script might not exist or fail, continue anyway
-
 
 # --- Constants ---
 SUPPORTED_LANGUAGES_FILE = "supported_languages.json"
