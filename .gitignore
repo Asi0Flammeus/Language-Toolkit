@@ -17,3 +17,4 @@ client_credentials.json
 venv
 
 .serena
+test-clean

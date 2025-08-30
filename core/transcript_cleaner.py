@@ -194,13 +194,14 @@ Transcript to clean:
             self.progress_callback(f"Error: {error_msg}")
             return False
     
-    def clean_folder(self, folder_path: Path, recursive: bool = False) -> List[Path]:
+    def clean_folder(self, folder_path: Path, recursive: bool = False, output_path: Optional[Path] = None) -> List[Path]:
         """
         Clean all transcript files in a folder.
         
         Args:
             folder_path: Path to folder containing transcript files
             recursive: Whether to process subfolders recursively
+            output_path: Optional output directory path (if specified, preserves folder structure)
             
         Returns:
             List of successfully processed file paths
@@ -232,7 +233,17 @@ Transcript to clean:
         for i, file_path in enumerate(txt_files, 1):
             self.progress_callback(f"Processing file {i}/{total_files}: {file_path.name}")
             
-            if self.clean_transcript_file(file_path):
+            # Calculate output path preserving folder structure
+            if output_path:
+                # Get relative path from input folder to the file
+                relative_file_path = file_path.relative_to(folder_path)
+                # Create the same structure in output directory
+                file_output_path = output_path / relative_file_path.parent / f"{file_path.stem}-ai-cleaned.txt"
+            else:
+                # If no output path specified, save in the same directory as input file
+                file_output_path = None
+            
+            if self.clean_transcript_file(file_path, file_output_path):
                 processed_files.append(file_path)
             
         self.progress_callback(f"Completed: {len(processed_files)}/{total_files} files cleaned successfully")

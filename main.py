@@ -1714,7 +1714,7 @@ class TranscriptCleanerTool(ToolBase):
         """Update progress display with a message."""
         self.send_progress_update(message)
     
-    def process_file(self, input_path, output_path):
+    def process_file(self, input_path, output_dir):
         """Process a single transcript file"""
         if not self.tool_core:
             raise ValueError("Anthropic API key not configured. Please configure API keys first.")
@@ -1722,14 +1722,8 @@ class TranscriptCleanerTool(ToolBase):
         try:
             input_p = Path(input_path)
             
-            # For transcript cleaning, output should have -ai-cleaned.txt suffix
-            if not output_path:
-                output_p = input_p.parent / f"{input_p.stem}-ai-cleaned.txt"
-            else:
-                output_p = Path(output_path)
-                # Ensure output has the correct suffix
-                if not output_p.name.endswith('-ai-cleaned.txt'):
-                    output_p = output_p.parent / f"{output_p.stem}-ai-cleaned.txt"
+            # Create output file path with -ai-cleaned.txt suffix in the output directory
+            output_p = Path(output_dir) / f"{input_p.stem}-ai-cleaned.txt"
             
             # Clean the transcript
             success = self.tool_core.clean_transcript_file(input_p, output_p)
@@ -1745,14 +1739,15 @@ class TranscriptCleanerTool(ToolBase):
             self.update_progress(error_msg)
             raise Exception(error_msg)
     
-    def process_folder(self, folder_path, recursive=False):
+    def process_folder(self, folder_path, output_path=None, recursive=False):
         """Process all transcript files in a folder"""
         if not self.tool_core:
             raise ValueError("Anthropic API key not configured. Please configure API keys first.")
         
         try:
             folder_p = Path(folder_path)
-            processed_files = self.tool_core.clean_folder(folder_p, recursive=recursive)
+            output_p = Path(output_path) if output_path else None
+            processed_files = self.tool_core.clean_folder(folder_p, recursive=recursive, output_path=output_p)
             
             if processed_files:
                 self.update_progress(f"✓ Successfully cleaned {len(processed_files)} transcripts")
@@ -1765,6 +1760,8 @@ class TranscriptCleanerTool(ToolBase):
             error_msg = f"Error processing folder: {str(e)}"
             self.update_progress(error_msg)
             raise Exception(error_msg)
+
+
 
 
 class MainApp(TkinterDnD.Tk):
