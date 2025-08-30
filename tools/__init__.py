@@ -6,6 +6,9 @@ from .pptx_translation import PPTXTranslationTool
 from .text_translation import TextTranslationTool
 from .pptx_to_pdf import PPTXtoPDFTool
 from .transcript_cleaner import TranscriptCleanerTool
+from .video_merge import VideoMergeTool
+from .sequential_processing import SequentialProcessingTool
+from .reward_evaluator import RewardEvaluatorTool
 
 __all__ = [
     'TextToSpeechTool',
@@ -13,10 +16,8 @@ __all__ = [
     'PPTXTranslationTool',
     'TextTranslationTool',
     'PPTXtoPDFTool',
-    'TranscriptCleanerTool'
+    'TranscriptCleanerTool',
+    'VideoMergeTool',
+    'SequentialProcessingTool',
+    'RewardEvaluatorTool'
 ]
-
-# Complex tools will be added after extraction:
-# - VideoMergeTool
-# - SequentialProcessingTool  
-# - RewardEvaluatorTool

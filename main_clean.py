@@ -23,12 +23,7 @@ from tools import (
     PPTXTranslationTool,
     TextTranslationTool,
     PPTXtoPDFTool,
-    TranscriptCleanerTool
-)
-
-# Complex tools still need to be extracted:
-# TODO: Extract these to separate modules
-from main import (
+    TranscriptCleanerTool,
     VideoMergeTool,
     SequentialProcessingTool,
     RewardEvaluatorTool
