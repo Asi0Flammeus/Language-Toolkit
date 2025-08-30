@@ -67,6 +67,13 @@ def get_tool_descriptions():
             "description": "Calculate proofreading rewards for presentations and text documents",
             "details": "Unified tool that evaluates PowerPoint presentations and text files to determine proofreading compensation based on language difficulty and content type",
             "use_case": "Perfect for calculating fair payment for proofreading services across different document types"
+        },
+        
+        "transcript_cleaner": {
+            "title": "Clean Raw Transcript",
+            "description": "Clean and tighten raw audio transcripts for professional presentation",
+            "details": "Uses Claude AI to remove filler words, fix grammar, and produce polished transcripts while maintaining speaker voice",
+            "use_case": "Ideal for converting raw recordings into presentation-ready transcripts"
         }
     }
 
@@ -116,6 +123,11 @@ def get_tool_requirements():
         "reward_evaluator": {
             "api_required": None,
             "api_description": "No API key required (uses local document analysis)"
+        },
+        
+        "transcript_cleaner": {
+            "api_required": "Anthropic (Claude)",
+            "api_description": "Anthropic API key for Claude AI transcript cleaning"
         }
     }
 
@@ -173,6 +185,12 @@ def get_supported_formats():
             "input": [".pptx", ".ppt", ".txt"],
             "output": [".csv"],
             "notes": "Analyzes PowerPoint and text files with configurable reward modes"
+        },
+        
+        "transcript_cleaner": {
+            "input": [".txt"],
+            "output": [".txt"],
+            "notes": "Cleans raw transcripts, removes filler words, fixes grammar"
         }
     }
 
@@ -230,6 +248,12 @@ def get_quick_tips():
             "Select the target language for accurate difficulty factors",
             "Choose reward mode: Image PPTX (1.5x), Video PPTX (1.0x), or TXT files",
             "Use recursive processing for multiple files in folders"
+        ],
+        
+        "transcript_cleaner": [
+            "Ensure your Anthropic (Claude) API key is configured",
+            "Cleaned files are saved with '-ai-cleaned.txt' suffix",
+            "Preserves technical terms and speaker's voice while removing filler words"
         ]
     }
 

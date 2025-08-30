@@ -1688,8 +1688,8 @@ class RewardEvaluatorTool(ToolBase):
 class TranscriptCleanerTool(ToolBase):
     """Clean and tighten raw transcripts using Claude AI"""
     
-    def __init__(self, parent, config_manager, progress_queue):
-        super().__init__(parent, config_manager, progress_queue)
+    def __init__(self, master, config_manager, progress_queue):
+        super().__init__(master, config_manager, progress_queue)
         from core.transcript_cleaner import TranscriptCleanerCore
         
         self.supported_extensions = ['.txt']
@@ -1709,6 +1709,10 @@ class TranscriptCleanerTool(ToolBase):
         else:
             self.api_key = None
             self.tool_core = None
+    
+    def update_progress(self, message):
+        """Update progress display with a message."""
+        self.send_progress_update(message)
     
     def process_file(self, input_path, output_path):
         """Process a single transcript file"""
@@ -2128,16 +2132,17 @@ class MainApp(TkinterDnD.Tk):
         """Opens a dialog to configure API keys, including ConvertAPI key."""
         api_config_window = tk.Toplevel(self)
         api_config_window.title("API Key Configuration")
-        api_config_window.geometry("550x220") # Adjusted for fewer fields
+        api_config_window.geometry("550x250") # Adjusted for API fields
 
         api_keys = self.config_manager.get_api_keys()
         api_entries = {}
 
         managed_api_names = [
             "openai",
+            "anthropic",       # Claude API
             "deepl",
             "elevenlabs",
-            "convertapi"      # Managed here
+            "convertapi"       # Managed here
         ]
 
         for api_name in managed_api_names:
@@ -2146,6 +2151,8 @@ class MainApp(TkinterDnD.Tk):
 
             if api_name == "convertapi":
                 label_text = "ConvertAPI Key:"
+            elif api_name == "anthropic":
+                label_text = "Anthropic (Claude) API Key:"
             else:
                  label_text = f"{api_name.replace('_', ' ').title()} API Key:"
 
@@ -2187,6 +2194,15 @@ class MainApp(TkinterDnD.Tk):
             self.text_translation_tool.api_key = api_keys.get("deepl")
         if hasattr(self, 'pptx_translation_tool'):
             self.pptx_translation_tool.api_key = api_keys.get("deepl")
+        if hasattr(self, 'transcript_cleaner_tool'):
+            self.transcript_cleaner_tool.api_key = api_keys.get("anthropic")
+            # Re-initialize the tool core if API key is updated
+            if api_keys.get("anthropic"):
+                from core.transcript_cleaner import TranscriptCleanerCore
+                self.transcript_cleaner_tool.tool_core = TranscriptCleanerCore(
+                    api_key=api_keys.get("anthropic"),
+                    progress_callback=self.transcript_cleaner_tool.update_progress
+                )
         
         window.destroy()
         messagebox.showinfo("Success", "API keys saved successfully")
