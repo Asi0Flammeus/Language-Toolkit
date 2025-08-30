@@ -243,7 +243,15 @@ async def run_tool_async(tool_class, task_id: str, input_files: List[Path],
                 raise ValueError("ElevenLabs API key not configured")
             tool = TextToSpeechCore(elevenlabs_key, progress_callback)
         else:
-            raise ValueError(f"Unsupported tool class: {tool_class}")
+            # Check if it's TranscriptCleanerCore
+            from core.transcript_cleaner import TranscriptCleanerCore
+            if tool_class == TranscriptCleanerCore:
+                anthropic_key = api_keys.get("anthropic")
+                if not anthropic_key:
+                    raise ValueError("Anthropic API key not configured")
+                tool = TranscriptCleanerCore(anthropic_key, progress_callback)
+            else:
+                raise ValueError(f"Unsupported tool class: {tool_class}")
 
         # Run processing in thread
         def process_files():
@@ -273,6 +281,15 @@ async def run_tool_async(tool_class, task_id: str, input_files: List[Path],
                             success = tool.text_to_speech_file(input_file, output_file)
                             if success:
                                 result_files.append(str(output_file))
+                        else:
+                            # Check if it's TranscriptCleanerCore
+                            from core.transcript_cleaner import TranscriptCleanerCore
+                            if tool_class == TranscriptCleanerCore:
+                                # Transcript cleaning
+                                output_file = output_dir / f"{input_file.stem}-ai-cleaned.txt"
+                                success = tool.clean_transcript_file(input_file, output_file)
+                                if success:
+                                    result_files.append(str(output_file))
 
                 # Update task with results
                 active_tasks[task_id]["status"] = "completed"
@@ -1411,6 +1428,76 @@ async def transcribe_audio(
 
     return TaskStatus(task_id=task_id, status="pending", source_lang=None)
 
+@app.post("/clean/transcript", response_model=TaskStatus)
+async def clean_transcript(
+    background_tasks: BackgroundTasks,
+    files: List[UploadFile] = File(...),
+    token: str = Depends(verify_token)
+):
+    """Clean and tighten raw transcripts using Claude AI"""
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided")
+
+    task_id = create_task_id()
+    temp_dir = get_temp_dir()
+    input_dir = temp_dir / "input"
+    output_dir = temp_dir / "output"
+    input_dir.mkdir(parents=True)
+    output_dir.mkdir(parents=True)
+
+    # Save uploaded files
+    input_files = []
+
+    for file in files:
+        # Validate that it's a text file
+        if not file.filename.endswith('.txt'):
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Invalid file type: {file.filename}. Only .txt files are supported."
+            )
+
+        # Validate file size (allow larger files for transcripts)
+        file.file.seek(0, 2)
+        file_size = file.file.tell()
+        file.file.seek(0)
+        
+        if file_size > 10 * 1024 * 1024:  # 10MB limit for transcripts
+            raise HTTPException(
+                status_code=400,
+                detail=f"File {file.filename} is too large. Maximum size is 10MB."
+            )
+
+        file_path = input_dir / file.filename
+        with open(file_path, "wb") as f:
+            content = await file.read()
+            f.write(content)
+        input_files.append(file_path)
+
+    # Initialize task
+    active_tasks[task_id] = {
+        "status": "pending",
+        "temp_dir": temp_dir,
+        "input_files": input_files,
+        "output_dir": output_dir,
+        "messages": [],
+        "manifest": None,
+        "source_lang": None  # Transcript cleaning doesn't have a source language
+    }
+
+    # Import the core module
+    from core.transcript_cleaner import TranscriptCleanerCore
+    
+    # Start background task
+    background_tasks.add_task(
+        run_tool_async,
+        TranscriptCleanerCore,
+        task_id,
+        input_files,
+        output_dir
+    )
+
+    return TaskStatus(task_id=task_id, status="pending", source_lang=None)
+
 @app.post("/convert/pptx", response_model=TaskStatus)
 async def convert_pptx(
     background_tasks: BackgroundTasks,
@@ -1839,6 +1926,22 @@ class AudioS3Request(BaseModel):
                 raise ValueError("Each input key must be a non-empty string")
         return v
 
+class TranscriptCleanerS3Request(BaseModel):
+    """Request model for cleaning transcript files stored in S3."""
+    input_keys: List[str] = Field(..., description="S3 object keys of the input transcript files")
+    output_prefix: Optional[str] = Field(None, description="Destination S3 prefix for cleaned transcripts")
+
+    @validator('input_keys')
+    def validate_input_keys(cls, v):
+        if not v or len(v) == 0:
+            raise ValueError("input_keys cannot be empty")
+        for key in v:
+            if not key or not isinstance(key, str):
+                raise ValueError("Each input key must be a non-empty string")
+            if not key.endswith('.txt'):
+                raise ValueError(f"Invalid file type for key {key}. Only .txt files are supported.")
+        return v
+
 # New request model for translating text files stored in S3
 class TextS3Request(BaseModel):
     """Request model for translating text files stored in S3."""
@@ -2031,6 +2134,52 @@ async def run_audio_transcription_s3_async(task_id: str, input_keys: List[str], 
                 result_local_paths.append(output_file)
             else:
                 raise RuntimeError(f"Failed to transcribe {input_file.name}")
+
+        # Upload results using original key structure
+        result_keys = s3.upload_files_with_mapping(result_local_paths, input_keys, output_prefix)
+
+        active_tasks[task_id]["status"] = "completed"
+        active_tasks[task_id]["result_files"] = result_keys
+
+    except Exception as e:
+        logger.error(f"Task {task_id} failed: {e}")
+        active_tasks[task_id]["status"] = "failed"
+        active_tasks[task_id]["error"] = str(e)
+
+async def run_transcript_cleaner_s3_async(task_id: str, input_keys: List[str], output_prefix: Optional[str],
+                                          output_dir: Path):
+    """Download transcripts from S3, clean them with Claude, upload results back to S3."""
+    try:
+        active_tasks[task_id]["status"] = "running"
+        api_keys = config_manager.get_api_keys()
+        anthropic_key = api_keys.get("anthropic")
+        if not anthropic_key:
+            raise ValueError("Anthropic API key not configured")
+
+        s3 = S3ClientWrapper()
+
+        def progress_callback(msg: str):
+            active_tasks[task_id]["messages"].append(msg)
+            logger.info(f"Task {task_id}: {msg}")
+
+        # Import the cleaner
+        from core.transcript_cleaner import TranscriptCleanerCore
+        
+        temp_input_dir = output_dir.parent / "input"
+        input_files = s3.download_files(input_keys, temp_input_dir)
+
+        cleaner = TranscriptCleanerCore(anthropic_key, progress_callback)
+        result_local_paths: List[Path] = []
+
+        for i, input_file in enumerate(input_files):
+            if not input_file.suffix == '.txt':
+                raise ValueError(f"Invalid file type: {input_file.name}. Only .txt files are supported.")
+            output_file = output_dir / f"{input_file.stem}-ai-cleaned.txt"
+            success = cleaner.clean_transcript_file(input_file, output_file)
+            if success:
+                result_local_paths.append(output_file)
+            else:
+                raise RuntimeError(f"Failed to clean {input_file.name}")
 
         # Upload results using original key structure
         result_keys = s3.upload_files_with_mapping(result_local_paths, input_keys, output_prefix)
@@ -2557,6 +2706,46 @@ async def transcribe_audio_s3(request: AudioS3Request, background_tasks: Backgro
 
     background_tasks.add_task(
         run_audio_transcription_s3_async,
+        task_id,
+        request.input_keys,
+        request.output_prefix,
+        output_dir
+    )
+
+    return TaskStatus(task_id=task_id, status="pending", source_lang=None)
+
+@app.post("/clean/transcript_s3", response_model=TaskStatus)
+async def clean_transcript_s3(
+    request: TranscriptCleanerS3Request,
+    background_tasks: BackgroundTasks,
+    token: str = Depends(verify_token)
+):
+    """Clean and tighten transcript files stored in S3 and upload results back to S3."""
+    # Validate S3 paths
+    for key in request.input_keys:
+        if not validate_s3_path(key):
+            raise HTTPException(status_code=400, detail=f"Invalid S3 path: {key}")
+
+    if request.output_prefix and not validate_s3_path(request.output_prefix):
+        raise HTTPException(status_code=400, detail=f"Invalid S3 output prefix: {request.output_prefix}")
+
+    task_id = create_task_id()
+    temp_dir = get_temp_dir()
+    output_dir = temp_dir / "output"
+    output_dir.mkdir(parents=True)
+
+    active_tasks[task_id] = {
+        "status": "pending",
+        "temp_dir": temp_dir,
+        "input_files": request.input_keys,
+        "output_dir": output_dir,
+        "messages": [],
+        "manifest": None,
+        "source_lang": None
+    }
+
+    background_tasks.add_task(
+        run_transcript_cleaner_s3_async,
         task_id,
         request.input_keys,
         request.output_prefix,

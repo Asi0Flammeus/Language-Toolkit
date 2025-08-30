@@ -36,6 +36,7 @@ websockets==15.0.1
 
 # AI & Translation Services
 openai==1.70.0
+anthropic>=0.64.0
 deepl==1.21.1
 elevenlabs==1.56.0
 convertapi==2.0.0

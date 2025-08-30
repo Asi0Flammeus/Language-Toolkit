@@ -16,3 +16,4 @@ data/*
 client_credentials.json
 venv
 
+.serena

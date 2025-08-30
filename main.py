@@ -27,12 +27,6 @@ from pydub import AudioSegment
 from core.tool_descriptions import get_short_description, get_tool_info, get_quick_tips
 from core.transcription import AudioTranscriptionCore
 
-# Run migration if needed (before other initializations)
-try:
-    subprocess.run([sys.executable, "migrate_secret.py", "--auto"], check=False)
-except Exception:
-    pass  # Migration script might not exist or fail, continue anyway
-
 
 # --- Constants ---
 SUPPORTED_LANGUAGES_FILE = "supported_languages.json"
@@ -1691,6 +1685,87 @@ class RewardEvaluatorTool(ToolBase):
             files.extend(directory.rglob(f"*{ext}"))
         return files
 
+class TranscriptCleanerTool(ToolBase):
+    """Clean and tighten raw transcripts using Claude AI"""
+    
+    def __init__(self, master, config_manager, progress_queue):
+        super().__init__(master, config_manager, progress_queue)
+        from core.transcript_cleaner import TranscriptCleanerCore
+        
+        self.supported_extensions = ['.txt']
+        self.title = "Clean Raw Transcript"
+        self.description = "Clean and tighten raw audio transcripts"
+        
+        # Get Anthropic API key from config
+        api_keys = config_manager.get_api_keys()
+        api_key = api_keys.get('anthropic', '')
+        
+        if api_key:
+            self.api_key = api_key
+            self.tool_core = TranscriptCleanerCore(
+                api_key=api_key,
+                progress_callback=self.update_progress
+            )
+        else:
+            self.api_key = None
+            self.tool_core = None
+    
+    def update_progress(self, message):
+        """Update progress display with a message."""
+        self.send_progress_update(message)
+    
+    def process_file(self, input_path, output_path):
+        """Process a single transcript file"""
+        if not self.tool_core:
+            raise ValueError("Anthropic API key not configured. Please configure API keys first.")
+        
+        try:
+            input_p = Path(input_path)
+            
+            # For transcript cleaning, output should have -ai-cleaned.txt suffix
+            if not output_path:
+                output_p = input_p.parent / f"{input_p.stem}-ai-cleaned.txt"
+            else:
+                output_p = Path(output_path)
+                # Ensure output has the correct suffix
+                if not output_p.name.endswith('-ai-cleaned.txt'):
+                    output_p = output_p.parent / f"{output_p.stem}-ai-cleaned.txt"
+            
+            # Clean the transcript
+            success = self.tool_core.clean_transcript_file(input_p, output_p)
+            
+            if success:
+                self.update_progress(f"✓ Cleaned transcript saved: {output_p.name}")
+                return str(output_p)
+            else:
+                raise Exception("Failed to clean transcript")
+                
+        except Exception as e:
+            error_msg = f"Error cleaning transcript: {str(e)}"
+            self.update_progress(error_msg)
+            raise Exception(error_msg)
+    
+    def process_folder(self, folder_path, recursive=False):
+        """Process all transcript files in a folder"""
+        if not self.tool_core:
+            raise ValueError("Anthropic API key not configured. Please configure API keys first.")
+        
+        try:
+            folder_p = Path(folder_path)
+            processed_files = self.tool_core.clean_folder(folder_p, recursive=recursive)
+            
+            if processed_files:
+                self.update_progress(f"✓ Successfully cleaned {len(processed_files)} transcripts")
+                return processed_files
+            else:
+                self.update_progress("No transcripts were cleaned")
+                return []
+                
+        except Exception as e:
+            error_msg = f"Error processing folder: {str(e)}"
+            self.update_progress(error_msg)
+            raise Exception(error_msg)
+
 
 class MainApp(TkinterDnD.Tk):
     """Main application class."""
@@ -1748,6 +1823,7 @@ class MainApp(TkinterDnD.Tk):
         self.pptx_translation_tool = self.create_tool_tab("PPTX Translation", PPTXTranslationTool)
         self.audio_transcription_tool = self.create_tool_tab("Audio Transcription", AudioTranscriptionTool)
         self.text_translation_tool = self.create_tool_tab("Text Translation", TextTranslationTool)
+        self.transcript_cleaner_tool = self.create_tool_tab("Clean Transcript", TranscriptCleanerTool)
         self.pptx_to_pdf_tool = self.create_tool_tab("PPTX to PDF/PNG/WEBP", PPTXtoPDFTool)
         self.text_to_speech_tool = self.create_tool_tab("Text to Speech", TextToSpeechTool)  
         self.video_merge_tool = self.create_tool_tab("Video Merge", VideoMergeTool)
@@ -2056,16 +2132,17 @@ class MainApp(TkinterDnD.Tk):
         """Opens a dialog to configure API keys, including ConvertAPI key."""
         api_config_window = tk.Toplevel(self)
         api_config_window.title("API Key Configuration")
-        api_config_window.geometry("550x220") # Adjusted for fewer fields
+        api_config_window.geometry("550x250") # Adjusted for API fields
 
         api_keys = self.config_manager.get_api_keys()
         api_entries = {}
 
         managed_api_names = [
             "openai",
+            "anthropic",       # Claude API
             "deepl",
             "elevenlabs",
-            "convertapi"      # Managed here
+            "convertapi"       # Managed here
         ]
 
         for api_name in managed_api_names:
@@ -2074,6 +2151,8 @@ class MainApp(TkinterDnD.Tk):
 
             if api_name == "convertapi":
                 label_text = "ConvertAPI Key:"
+            elif api_name == "anthropic":
+                label_text = "Anthropic (Claude) API Key:"
             else:
                  label_text = f"{api_name.replace('_', ' ').title()} API Key:"
 
@@ -2115,6 +2194,15 @@ class MainApp(TkinterDnD.Tk):
             self.text_translation_tool.api_key = api_keys.get("deepl")
         if hasattr(self, 'pptx_translation_tool'):
             self.pptx_translation_tool.api_key = api_keys.get("deepl")
+        if hasattr(self, 'transcript_cleaner_tool'):
+            self.transcript_cleaner_tool.api_key = api_keys.get("anthropic")
+            # Re-initialize the tool core if API key is updated
+            if api_keys.get("anthropic"):
+                from core.transcript_cleaner import TranscriptCleanerCore
+                self.transcript_cleaner_tool.tool_core = TranscriptCleanerCore(
+                    api_key=api_keys.get("anthropic"),
+                    progress_callback=self.transcript_cleaner_tool.update_progress
+                )
         
         window.destroy()
         messagebox.showinfo("Success", "API keys saved successfully")
