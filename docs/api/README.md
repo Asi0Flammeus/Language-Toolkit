@@ -22,14 +22,12 @@ A REST API for the Language Toolkit providing document processing, translation, 
 pip install -r api_requirements.txt
 ```
 
-2. Configure API keys in `api_keys.json`:
-```json
-{
-    "openai": "your-openai-api-key",
-    "deepl": "your-deepl-api-key", 
-    "elevenlabs": "your-elevenlabs-api-key",
-    "convertapi": "your-convertapi-secret"
-}
+2. Configure API keys in `.env` file (copy from `.env.example`):
+```bash
+OPENAI_API_KEY=your-openai-api-key
+DEEPL_API_KEY=your-deepl-api-key
+ELEVENLABS_API_KEY=your-elevenlabs-api-key
+CONVERTAPI_SECRET=your-convertapi-secret
 ```
 
 3. Configure authentication tokens in `auth_tokens.json`:

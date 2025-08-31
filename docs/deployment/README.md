@@ -39,15 +39,17 @@ Choose your deployment method based on your needs:
 
 All deployment methods require:
 
-1. **API Keys Configuration** (`api_keys.json`):
-```json
-{
-    "deepl": "your-api-key",
-    "openai": "your-api-key",
-    "elevenlabs": "your-api-key",
-    "convertapi": "your-api-key",
-    "anthropic": "your-api-key"
-}
+1. **API Keys Configuration** (`.env` file):
+```bash
+# Copy from .env.example
+cp .env.example .env
+
+# Then configure your API keys:
+DEEPL_API_KEY=your-api-key
+OPENAI_API_KEY=your-api-key
+ELEVENLABS_API_KEY=your-api-key
+CONVERTAPI_SECRET=your-api-key
+ANTHROPIC_API_KEY=your-api-key
 ```
 
 2. **Language Configuration** (`supported_languages.json`)
@@ -75,7 +77,7 @@ OUTPUT_DIR=/tmp/outputs
 
 ## Security Considerations
 
-1. **API Keys**: Never commit API keys to version control
+1. **API Keys**: Never commit `.env` file to version control (use `.env.example` as template)
 2. **Authentication**: Always use strong authentication tokens
 3. **HTTPS**: Use reverse proxy with SSL in production
 4. **File Validation**: Configure appropriate file size limits

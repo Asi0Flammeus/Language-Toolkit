@@ -4,23 +4,20 @@ A comprehensive Python-based application for language processing tasks, featurin
 
 ## 🚀 Quick Start
 
-### Using the Start Script (Recommended)
+### GUI App
+
 ```bash
-cd Language-Toolkit
-./start_app.sh     # Linux/Mac
-start_app.bat      # Windows
+python main.py
 ```
 
-### Manual Start
-```bash
-# GUI Application
-python main.py
+### API Server
 
-# API Server
+```bash
 python api_server.py
 ```
 
 Access points:
+
 - **GUI Application**: Desktop interface
 - **API Server**: http://localhost:8000
 - **API Documentation**: http://localhost:8000/docs
@@ -28,6 +25,7 @@ Access points:
 ## ✨ Features
 
 ### Core Tools
+
 - **PPTX Translation**: Translate PowerPoint presentations with full formatting preservation
 - **Text Translation**: Multi-language text file translation using DeepL
 - **Audio Transcription**: Convert audio to text using OpenAI Whisper
@@ -38,8 +36,8 @@ Access points:
 - **Reward Evaluation**: Assess text quality based on custom metrics
 
 ### Key Capabilities
+
 - Batch processing with recursive directory support
-- Drag & drop file selection
 - Real-time progress tracking
 - Multi-language support (30+ languages)
 - Asynchronous task processing
@@ -48,7 +46,6 @@ Access points:
 ## 📋 Prerequisites
 
 - Python 3.8 or higher
-- Node.js 14+ (for test app)
 - API keys for:
   - DeepL (translation)
   - OpenAI (transcription)
@@ -59,12 +56,14 @@ Access points:
 ## 🔧 Installation
 
 ### 1. Clone the Repository
+
 ```bash
 git clone https://github.com/Asi0Flammeus/Language-Toolkit.git
 cd Language-Toolkit
 ```
 
 ### 2. Set Up Python Environment
+
 ```bash
 # Create virtual environment
 python3 -m venv env
@@ -74,45 +73,53 @@ source env/bin/activate    # Linux/Mac
 .\env\Scripts\activate      # Windows
 
 # Install dependencies
-pip install -r requirements.txt
+pip3 install -r requirements.txt
 ```
 
 ### 3. Configure API Keys
 
-Create `api_keys.json`:
-```json
-{
-    "deepl": "your-deepl-api-key",
-    "openai": "your-openai-api-key",
-    "elevenlabs": "your-elevenlabs-api-key",
-    "convertapi": "your-convertapi-secret",
-    "anthropic": "your-anthropic-api-key"
-}
+Copy the example environment file and add your API keys:
+
+```bash
+cp .env.example .env
+```
+
+Then edit `.env` with your API keys:
+
+```bash
+# API Keys
+DEEPL_API_KEY=your-deepl-api-key
+OPENAI_API_KEY=your-openai-api-key
+ELEVENLABS_API_KEY=your-elevenlabs-api-key
+CONVERTAPI_SECRET=your-convertapi-secret
+ANTHROPIC_API_KEY=your-anthropic-api-key
 ```
 
 ### 4. Configure Languages
 
 Create `supported_languages.json`:
+
 ```json
 {
-    "source_languages": {
-        "en": "English",
-        "fr": "French",
-        "de": "German",
-        "es": "Spanish"
-    },
-    "target_languages": {
-        "en": "English",
-        "fr": "French",
-        "de": "German",
-        "es": "Spanish"
-    }
+  "source_languages": {
+    "en": "English",
+    "fr": "French",
+    "de": "German",
+    "es": "Spanish"
+  },
+  "target_languages": {
+    "en": "English",
+    "fr": "French",
+    "de": "German",
+    "es": "Spanish"
+  }
 }
 ```
 
 ## 🖥️ Usage
 
 ### GUI Application
+
 1. Launch the application: `python main.py`
 2. Select the desired tool tab
 3. Choose processing mode (single file or folder)
@@ -121,6 +128,7 @@ Create `supported_languages.json`:
 6. Click "Process" to start
 
 ### API Server
+
 1. Start the server: `python api_server.py`
 2. Access documentation at http://localhost:8000/docs
 3. Use authentication token for API requests
@@ -185,6 +193,7 @@ docker run -p 8000:8000 language-toolkit
 ## 🤝 Contributing
 
 We welcome contributions! Please see our [Development Guide](docs/development/README.md) for details on:
+
 - Setting up your development environment
 - Code style guidelines
 - Testing requirements
@@ -200,10 +209,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **Documentation**: [Full Documentation](docs/README.md)
 - **API Reference**: http://localhost:8000/docs (when running)
 
-## 🏷️ Version
-
-Current Version: 2.0.0 (Modularized Architecture)
-
 ---
 
-Made with ❤️ by the Language Toolkit Team
+Made with ❤️ by asi0 and Claude agents
+
