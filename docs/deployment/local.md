@@ -70,34 +70,24 @@ API_HOST=0.0.0.0
 API_PORT=8000
 ```
 
-### 1.5 Set Up Authentication Tokens
-```bash
-# Copy auth tokens example file
-cp auth_tokens.json.example auth_tokens.json
+### 1.5 Set Up Authentication
 
-# Edit auth_tokens.json
-nano auth_tokens.json
+**Note:** Authentication now uses OAuth2 client credentials flow. Configure your clients in the `.env` file:
+
+```env
+# OAuth2 Client Credentials
+# For single client:
+CLIENT_ID=your-client-id
+CLIENT_SECRET=your-client-secret
+
+# For multiple clients (optional):
+# CLIENT_ID_1=first-client-id
+# CLIENT_SECRET_1=first-client-secret
+# CLIENT_ID_2=second-client-id
+# CLIENT_SECRET_2=second-client-secret
 ```
 
-**Note:** The `api_keys.json` file is deprecated. All API keys should now be configured in the `.env` file.
-
-Update `auth_tokens.json` for authentication:
-```json
-{
-  "tokens": {
-    "token_admin_abc123def456": {
-      "name": "Admin User",
-      "role": "admin",
-      "created": "2024-01-01"
-    },
-    "token_user_xyz789ghi012": {
-      "name": "Test User",
-      "role": "user",
-      "created": "2024-01-01"
-    }
-  }
-}
-```
+To obtain an access token, use the `/auth/token` endpoint with your client credentials.
 
 ## 🚀 Step 2: Start the API Server
 

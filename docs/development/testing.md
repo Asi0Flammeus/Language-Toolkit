@@ -16,10 +16,11 @@ curl http://localhost:8000/health
 ```
 
 3. **Ensure authentication tokens are configured:**
-The API requires authentication tokens. Make sure `auth_tokens.json` exists:
+The API requires OAuth2 authentication. Configure client credentials in `.env`:
 ```bash
-cp auth_tokens.json.example auth_tokens.json
-# Edit auth_tokens.json to customize tokens if needed
+# OAuth2 Client Credentials
+CLIENT_ID=test-client-id
+CLIENT_SECRET=test-client-secret
 ```
 
 ## Testing Methods

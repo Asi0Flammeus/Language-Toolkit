@@ -36,14 +36,14 @@ python api_server.py
 
 ## 🔑 Authentication
 
-For API access, configure tokens in `auth_tokens.json`:
-```json
-{
-    "tokens": [
-        "token_admin_abc123def456"
-    ]
-}
+For API access, configure client credentials in `.env` file:
+```bash
+# OAuth2 Client Credentials
+CLIENT_ID=your-client-id
+CLIENT_SECRET=your-client-secret
 ```
+
+Then obtain an access token using the `/auth/token` endpoint.
 
 ## 🧪 Quick Test - GUI
 

@@ -30,17 +30,18 @@ ELEVENLABS_API_KEY=your-elevenlabs-api-key
 CONVERTAPI_SECRET=your-convertapi-secret
 ```
 
-3. Configure authentication tokens in `auth_tokens.json`:
-```json
-{
-    "tokens": [
-        "token_admin_abc123def456",
-        "token_user_xyz789uvw012",
-        "token_service_mno345pqr678"
-    ]
-}
+3. Configure authentication in `.env` file:
+```bash
+# Client credentials for OAuth2 authentication
+CLIENT_ID=your-client-id
+CLIENT_SECRET=your-client-secret
+
+# Or for multiple clients:
+# CLIENT_ID_1=first-client-id
+# CLIENT_SECRET_1=first-client-secret
+# CLIENT_ID_2=second-client-id
+# CLIENT_SECRET_2=second-client-secret
 ```
-*Copy from `auth_tokens.json.example` and customize as needed.*
 
 ## Running the API
 

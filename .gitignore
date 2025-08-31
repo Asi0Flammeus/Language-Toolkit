@@ -10,10 +10,10 @@ api_keys.json
 test-app/
 elevenlabs_voices.json
 api-test-app/node_modules
-auth_tokens.json
+# Deprecated authentication files (now using .env)
+# auth_tokens.json (deprecated - use .env)
+# client_credentials.json (deprecated - use .env)
 data/*
-# Security files
-client_credentials.json
 venv
 
 .serena

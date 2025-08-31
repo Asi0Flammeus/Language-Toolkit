@@ -53,7 +53,7 @@ ANTHROPIC_API_KEY=your-api-key
 ```
 
 2. **Language Configuration** (`supported_languages.json`)
-3. **Authentication Tokens** (`auth_tokens.json` for API)
+3. **Authentication** (OAuth2 client credentials in `.env` file)
 
 ## Environment Variables
 
