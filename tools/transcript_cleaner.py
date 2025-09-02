@@ -16,18 +16,18 @@ class TranscriptCleanerTool(ToolBase):
         self.title = "Clean Raw Transcript"
         self.description = "Clean and tighten raw audio transcripts"
         
-        # Get Anthropic API key from config
+        # Get API keys from config
         api_keys = config_manager.get_api_keys()
-        api_key = api_keys.get('anthropic', '')
+        anthropic_key = api_keys.get('anthropic', '')
+        openai_key = api_keys.get('openai', '')
         
-        if api_key:
-            self.api_key = api_key
+        if anthropic_key or openai_key:
             self.tool_core = TranscriptCleanerCore(
-                api_key=api_key,
+                api_key=anthropic_key,
+                openai_api_key=openai_key,
                 progress_callback=self.update_progress
             )
         else:
-            self.api_key = None
             self.tool_core = None
     
     def update_progress(self, message):
@@ -37,7 +37,7 @@ class TranscriptCleanerTool(ToolBase):
     def process_file(self, input_path, output_dir):
         """Process a single transcript file"""
         if not self.tool_core:
-            raise ValueError("Anthropic API key not configured. Please configure API keys first.")
+            raise ValueError("No API keys configured. Please configure Anthropic or OpenAI API keys first.")
         
         try:
             input_p = Path(input_path)
@@ -62,7 +62,7 @@ class TranscriptCleanerTool(ToolBase):
     def process_folder(self, folder_path, output_path=None, recursive=False):
         """Process all transcript files in a folder"""
         if not self.tool_core:
-            raise ValueError("Anthropic API key not configured. Please configure API keys first.")
+            raise ValueError("No API keys configured. Please configure Anthropic or OpenAI API keys first.")
         
         try:
             folder_p = Path(folder_path)
