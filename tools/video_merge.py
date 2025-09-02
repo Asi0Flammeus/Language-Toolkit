@@ -24,7 +24,7 @@ class VideoMergeTool(ToolBase):
     def __init__(self, master, config_manager, progress_queue):
         super().__init__(master, config_manager, progress_queue)
         # We don't use self.supported_extensions in the usual way
-        self.supported_extensions = {'.mp3', '.png'}
+        self.supported_extensions = {'.mp3', '.png', '.webp'}
         
         # Force selection mode to folder only
         self.selection_mode = tk.StringVar(value="folder")
@@ -156,7 +156,7 @@ class VideoMergeTool(ToolBase):
                 self.send_progress_update(f"Error reading directory {input_dir}: {e}")
                 return
             mp3_files = sorted([input_dir / f for f in entries if f.lower().endswith('.mp3')])
-            png_files = sorted([input_dir / f for f in entries if f.lower().endswith('.png')])
+            png_files = sorted([input_dir / f for f in entries if f.lower().endswith(('.png', '.webp'))])
             self.send_progress_update(f"Found {len(mp3_files)} MP3 and {len(png_files)} PNG in {input_dir}")
             # Match files by identifier
             file_pairs = self.match_file_pairs(mp3_files, png_files)
@@ -185,7 +185,7 @@ class VideoMergeTool(ToolBase):
             curr_dir = Path(dirpath)
             # Collect MP3 and PNG files in the current directory
             mp3_files = sorted([curr_dir / f for f in filenames if f.lower().endswith('.mp3')])
-            png_files = sorted([curr_dir / f for f in filenames if f.lower().endswith('.png')])
+            png_files = sorted([curr_dir / f for f in filenames if f.lower().endswith(('.png', '.webp'))])
             if not mp3_files or not png_files:
                 continue
             self.send_progress_update(f"Found {len(mp3_files)} MP3 and {len(png_files)} PNG in {curr_dir}")

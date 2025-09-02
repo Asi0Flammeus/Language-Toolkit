@@ -250,7 +250,7 @@ class VideoMergerCore:
     
     def _get_image_files(self, directory: Path) -> List[Path]:
         """Get sorted list of image files from directory."""
-        image_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.gif'}
+        image_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.gif', '.webp'}
         
         image_files = []
         for file_path in directory.iterdir():
@@ -441,7 +441,7 @@ class VideoMergerCore:
     
     def get_supported_image_formats(self) -> List[str]:
         """Get list of supported image formats."""
-        return ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.gif']
+        return ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.gif', '.webp']
     
     def create_video_from_file_pairs(self, file_pairs: List[Tuple[str, Path, Path]], 
                                     output_path: Path,
