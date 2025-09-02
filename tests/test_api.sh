@@ -5,7 +5,7 @@
 
 API_BASE="http://localhost:8000"
 TEST_FILES_DIR="./test-app"
-AUTH_TOKEN="token_admin_abc123def456"  # Authentication token from auth_tokens.json
+AUTH_TOKEN=""  # Obtain token from /auth/token endpoint using client credentials
 
 echo "🧪 Language Toolkit API Test Suite"
 echo "=================================="

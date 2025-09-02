@@ -165,21 +165,12 @@ python tests/test_auth.py
 
 ## Migration from Old Authentication
 
-If you're migrating from the old `client_credentials.json` or `auth_tokens.json` system:
+The API uses OAuth2 client credentials flow exclusively. All authentication is configured via environment variables in the `.env` file as shown above. 
 
-1. Remove old configuration files:
-   ```bash
-   rm client_credentials.json auth_tokens.json
-   ```
-
-2. Update your `.env` file with client credentials as shown above
-
-3. Update your application code to use OAuth2 flow instead of static tokens
-
-4. Test the new authentication:
-   ```bash
-   python tests/test_auth.py
-   ```
+To test authentication:
+```bash
+python tests/test_auth.py
+```
 
 ## Troubleshooting
 

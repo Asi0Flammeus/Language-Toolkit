@@ -97,32 +97,12 @@ class TextToSpeechCore:
         self.api_key = api_key
         self.progress_callback = progress_callback or (lambda x: None)
         self.voices = []
-        self.local_voice_mapping = {}
-        
-        # Load local voice mapping from elevenlabs_voices.json
-        self._load_local_voice_mapping()
+        self.voice_mapping = {}  # Will be populated from API
         
         # Load available voices from API
-        self._load_voices()
+        self._load_voices_from_api()
     
-    def _load_local_voice_mapping(self):
-        """Load local voice name to ID mapping from elevenlabs_voices.json."""
-        try:
-            # Look for the file in the project root directory
-            voices_file = Path(__file__).parent.parent / "elevenlabs_voices.json"
-            
-            if voices_file.exists():
-                with open(voices_file, 'r', encoding='utf-8') as f:
-                    self.local_voice_mapping = json.load(f)
-                    logger.info(f"Loaded {len(self.local_voice_mapping)} local voice mappings from {voices_file}")
-            else:
-                logger.warning(f"Local voice mapping file not found: {voices_file}")
-                
-        except Exception as e:
-            logger.error(f"Failed to load local voice mapping: {e}")
-            self.local_voice_mapping = {}
-    
-    def _load_voices(self):
+    def _load_voices_from_api(self):
         """Load available voices from ElevenLabs API."""
         if not self.api_key:
             logger.warning("ElevenLabs API key not provided")
@@ -132,12 +112,22 @@ class TextToSpeechCore:
             url = "https://api.elevenlabs.io/v1/voices"
             headers = {"xi-api-key": self.api_key}
             
-            response = requests.get(url, headers=headers)
+            self.progress_callback("Fetching voices from ElevenLabs API...")
+            response = requests.get(url, headers=headers, params={"show_legacy": "false"})
             response.raise_for_status()
             
             data = response.json()
             self.voices = data.get("voices", [])
-            self.progress_callback(f"Loaded {len(self.voices)} voices")
+            
+            # Build voice mapping from API data
+            self.voice_mapping = {}
+            for voice in self.voices:
+                name = voice.get("name", "")
+                voice_id = voice.get("voice_id", "")
+                if name and voice_id:
+                    self.voice_mapping[name] = voice_id
+            
+            self.progress_callback(f"Loaded {len(self.voices)} voices from API")
             
         except Exception as e:
             logger.error(f"Failed to load voices: {e}")
@@ -245,9 +235,9 @@ class TextToSpeechCore:
         Parse voice selection from various input formats.
         
         Priority order:
-        1. Local voice mapping from elevenlabs_voices.json  
-        2. Direct voice ID format
-        3. API voice name lookup
+        1. Direct voice ID format
+        2. API voice name lookup (exact match)
+        3. API voice name lookup (case-insensitive)
         4. "Name (ID)" format extraction
         """
         if not voice_input:
@@ -255,83 +245,73 @@ class TextToSpeechCore:
         
         voice_input = voice_input.strip()
         
-        # 1. Check local voice mapping first (highest priority)
-        if voice_input in self.local_voice_mapping:
-            voice_id = self.local_voice_mapping[voice_input]
-            logger.debug(f"Found voice '{voice_input}' in local mapping: {voice_id}")
-            return voice_id
-        
-        # 2. Check if it's already a voice ID (format: voice_id)
+        # 1. Check if it's already a voice ID (format: alphanumeric string)
         if re.match(r'^[a-zA-Z0-9]{20,}$', voice_input):
             return voice_input
         
-        # 3. Try to find by name in API voices
-        voice_id = self.find_voice_by_name(voice_input)
-        if voice_id:
+        # 2. Try exact match in API voices
+        if voice_input in self.voice_mapping:
+            voice_id = self.voice_mapping[voice_input]
+            logger.debug(f"Found voice '{voice_input}' in API mapping: {voice_id}")
             return voice_id
         
+        # 3. Try case-insensitive match in API voices
+        for voice_name, voice_id in self.voice_mapping.items():
+            if voice_name.lower() == voice_input.lower():
+                logger.debug(f"Found voice '{voice_name}' (case-insensitive) in API mapping: {voice_id}")
+                return voice_id
+        
         # 4. Try to extract from "Name (ID)" format
-        match = re.search(r'\\(([a-zA-Z0-9]+)\\)$', voice_input)
+        match = re.search(r'\(([a-zA-Z0-9]+)\)$', voice_input)
         if match:
             return match.group(1)
         
-        logger.warning(f"Could not resolve voice: '{voice_input}'. Available local voices: {list(self.local_voice_mapping.keys())}")
+        logger.warning(f"Could not resolve voice: '{voice_input}'. Available API voices: {list(self.voice_mapping.keys())}")
         return None
     
     def get_available_voice_names(self) -> Dict[str, str]:
         """
-        Get all available voice names and their IDs.
+        Get all available voice names and their IDs from API.
         
         Returns:
-            Dictionary mapping voice names to voice IDs, with local mappings taking priority
+            Dictionary mapping voice names to voice IDs
         """
-        # Start with API voices
-        voice_map = {}
-        for voice in self.voices:
-            name = voice.get("name", "")
-            voice_id = voice.get("voice_id", "")
-            if name and voice_id:
-                voice_map[name] = voice_id
-        
-        # Override with local mappings (they take priority)
-        voice_map.update(self.local_voice_mapping)
-        
-        return voice_map
+        return self.voice_mapping.copy()
     
     def extract_voice_from_filename(self, file_path: Path) -> Optional[str]:
         """
-        Extract voice name from filename by matching against known voice names.
+        Extract voice name from filename by matching against known API voice names.
         
-        For file 'test_Loic_transcript_fr.txt':
-        - Splits into parts: ['test', 'Loic', 'transcript', 'fr']  
-        - Checks each part against elevenlabs_voices.json keys
-        - Returns 'Loic' if found in the mapping
+        For file 'test_Rachel_transcript_en.txt':
+        - Splits into parts: ['test', 'Rachel', 'transcript', 'en']  
+        - Checks each part against API voice names
+        - Returns 'Rachel' if found in the API voices
         
         Args:
             file_path: Path to the input file
             
         Returns:
-            Voice name if found in local mapping, None otherwise
+            Voice name if found in API voices, None otherwise
         """
-        # Split filename by underscores, hyphens, and spaces
-        filename_parts = re.split(r'[_\-\s]+', file_path.stem)
+        # Split filename by underscores, hyphens, spaces, and dots
+        filename_parts = re.split(r'[_\-\s\.]+', file_path.stem)
         
-        # Check each part against local voice mapping (case-insensitive)
+        # Check each part against API voice mapping (case-insensitive)
         for part in filename_parts:
             part_clean = part.strip()
             
             # Direct match (case-sensitive)
-            if part_clean in self.local_voice_mapping:
-                logger.debug(f"Found voice '{part_clean}' in filename '{file_path.name}'")
+            if part_clean in self.voice_mapping:
+                logger.info(f"Found voice '{part_clean}' in filename '{file_path.name}'")
                 return part_clean
             
             # Case-insensitive match
-            for voice_name in self.local_voice_mapping.keys():
+            for voice_name in self.voice_mapping.keys():
                 if part_clean.lower() == voice_name.lower():
-                    logger.debug(f"Found voice '{voice_name}' (case-insensitive) in filename '{file_path.name}'")
+                    logger.info(f"Found voice '{voice_name}' (case-insensitive) in filename '{file_path.name}'")
                     return voice_name
         
-        logger.debug(f"No voice found in filename '{file_path.name}'. Available voices: {list(self.local_voice_mapping.keys())}")
+        logger.debug(f"No voice found in filename '{file_path.name}'. Available API voices: {list(self.voice_mapping.keys())[:10]}...")
         return None
     
     def validate_text_file(self, file_path: Path) -> bool:

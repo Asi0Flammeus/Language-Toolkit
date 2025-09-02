@@ -289,9 +289,9 @@ class PPTXConverterCore:
 
             self.progress_callback("Converting PNG files to WEBP...")
 
-            for i, png_path in enumerate(png_files):
+            for i, png_path in enumerate(png_files, 1):
                 png_file = Path(png_path)
-                webp_name = f"{base_name}_{i:02d}.webp"
+                webp_name = f"{base_name}_slide_{i:02d}.webp"
                 webp_path = output_dir / webp_name
 
                 # Convert PNG to WEBP using PIL

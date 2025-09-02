@@ -88,6 +88,8 @@ class ConfigManager:
         """
         self.config = {}
         self.use_project_api_keys = use_project_api_keys
+        self._api_keys_cache = None  # Cache for API keys
+        self._api_keys_loaded = False  # Track if we've already logged about API keys
         
         # File paths
         self.project_root = Path(__file__).parent.parent
@@ -111,7 +113,7 @@ class ConfigManager:
             if self.config_file.exists():
                 with open(self.config_file, 'r', encoding='utf-8') as f:
                     self.config = json.load(f)
-                logging.info(f"Configuration loaded from {self.config_file}")
+                logging.debug(f"Configuration loaded from {self.config_file}")
             else:
                 self.config = self.get_default_config()
                 self.save_config()
@@ -207,6 +209,10 @@ class ConfigManager:
     
     def get_api_keys(self) -> Dict[str, str]:
         """Get stored API keys - prioritize .env over JSON files."""
+        # Return cached keys if already loaded
+        if self._api_keys_cache is not None:
+            return self._api_keys_cache
+        
         api_keys = {}
         
         # First try to get keys from environment variables
@@ -223,9 +229,12 @@ class ConfigManager:
             if env_value:
                 api_keys[key] = env_value
         
-        # If we got keys from env, return them
+        # If we got keys from env, cache and return them
         if api_keys:
-            logger.info("Loaded API keys from environment variables")
+            if not self._api_keys_loaded:
+                logger.info("API keys loaded successfully")
+                self._api_keys_loaded = True
+            self._api_keys_cache = api_keys
             return api_keys
         
         # Otherwise fall back to JSON files
@@ -235,15 +244,22 @@ class ConfigManager:
                 if self.project_api_keys_file.exists():
                     with open(self.project_api_keys_file, 'r', encoding='utf-8') as f:
                         project_keys = json.load(f)
-                    logger.info(f"Loaded API keys from {self.project_api_keys_file}")
+                    if not self._api_keys_loaded:
+                        logger.info("API keys loaded successfully")
+                        self._api_keys_loaded = True
+                    self._api_keys_cache = project_keys
                     return project_keys
-                else:
-                    logger.warning(f"Project API keys file not found: {self.project_api_keys_file}")
-                    return {}
             except Exception as e:
-                logger.error(f"Failed to load project API keys: {e}")
-                return {}
-        return self.config.get("api_keys", {})
+                logger.warning(f"Failed to load project API keys: {e}")
+        
+        # Fall back to global config
+        config_keys = self.config.get("api_keys", {})
+        if config_keys and not self._api_keys_loaded:
+            logger.info("API keys loaded successfully")
+            self._api_keys_loaded = True
+        
+        self._api_keys_cache = config_keys
+        return config_keys
     
     def save_api_keys(self, api_keys: Dict[str, str]):
         """Save API keys to configuration."""

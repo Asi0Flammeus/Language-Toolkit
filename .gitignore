@@ -1,20 +1,9 @@
-playground.py
 __pycache__/
-.bashrc
-.bash_profile
 .env
-env/
-outputs/
-playground.py
-api_keys.json
-test-app/
-elevenlabs_voices.json
-api-test-app/node_modules
-auth_tokens.json
-data/*
-# Security files
-client_credentials.json
-venv
-
 .serena
-test-clean
+.claude
+env/
+venv/
+outputs/
+data/*
+tests/

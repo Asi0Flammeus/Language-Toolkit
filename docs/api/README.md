@@ -22,27 +22,26 @@ A REST API for the Language Toolkit providing document processing, translation, 
 pip install -r api_requirements.txt
 ```
 
-2. Configure API keys in `api_keys.json`:
-```json
-{
-    "openai": "your-openai-api-key",
-    "deepl": "your-deepl-api-key", 
-    "elevenlabs": "your-elevenlabs-api-key",
-    "convertapi": "your-convertapi-secret"
-}
+2. Configure API keys in `.env` file (copy from `.env.example`):
+```bash
+OPENAI_API_KEY=your-openai-api-key
+DEEPL_API_KEY=your-deepl-api-key
+ELEVENLABS_API_KEY=your-elevenlabs-api-key
+CONVERTAPI_SECRET=your-convertapi-secret
 ```
 
-3. Configure authentication tokens in `auth_tokens.json`:
-```json
-{
-    "tokens": [
-        "token_admin_abc123def456",
-        "token_user_xyz789uvw012",
-        "token_service_mno345pqr678"
-    ]
-}
+3. Configure authentication in `.env` file:
+```bash
+# Client credentials for OAuth2 authentication
+CLIENT_ID=your-client-id
+CLIENT_SECRET=your-client-secret
+
+# Or for multiple clients:
+# CLIENT_ID_1=first-client-id
+# CLIENT_SECRET_1=first-client-secret
+# CLIENT_ID_2=second-client-id
+# CLIENT_SECRET_2=second-client-secret
 ```
-*Copy from `auth_tokens.json.example` and customize as needed.*
 
 ## Running the API
 

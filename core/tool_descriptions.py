@@ -35,8 +35,8 @@ def get_tool_descriptions():
         },
         
         "pptx_to_pdf_png": {
-            "title": "PPTX to PDF/PNG",
-            "description": "Convert PowerPoint presentations to PDF documents or PNG images",
+            "title": "PPTX Export",
+            "description": "Export PowerPoint presentations to PDF documents, PNG, or WEBP images",
             "details": "Creates high-quality PDF files or individual slide images from your presentations",
             "use_case": "Useful for sharing presentations or creating print-ready materials"
         },
@@ -72,7 +72,7 @@ def get_tool_descriptions():
         "transcript_cleaner": {
             "title": "Clean Raw Transcript",
             "description": "Clean and tighten raw audio transcripts for professional presentation",
-            "details": "Uses Claude AI to remove filler words, fix grammar, and produce polished transcripts while maintaining speaker voice",
+            "details": "Uses Claude AI (with OpenAI GPT-4 fallback) to remove filler words, fix grammar, and produce polished transcripts while maintaining speaker voice",
             "use_case": "Ideal for converting raw recordings into presentation-ready transcripts"
         }
     }
@@ -126,8 +126,8 @@ def get_tool_requirements():
         },
         
         "transcript_cleaner": {
-            "api_required": "Anthropic (Claude)",
-            "api_description": "Anthropic API key for Claude AI transcript cleaning"
+            "api_required": "Anthropic or OpenAI",
+            "api_description": "Anthropic API key for Claude AI (primary) or OpenAI API key for GPT-4 (fallback)"
         }
     }
 
@@ -319,3 +319,21 @@ def get_tool_list_for_gui():
         })
     
     return tools
+
+def get_all_descriptions():
+    """
+    Get all tool descriptions formatted for overview display.
+    
+    Returns:
+        dict: All tool descriptions with details
+    """
+    return get_tool_descriptions()
+
+def get_all_api_requirements():
+    """
+    Get all API requirements formatted for display.
+    
+    Returns:
+        dict: All tool API requirements
+    """
+    return get_tool_requirements()

@@ -250,7 +250,7 @@ class VideoMergerCore:
     
     def _get_image_files(self, directory: Path) -> List[Path]:
         """Get sorted list of image files from directory."""
-        image_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.gif'}
+        image_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.gif', '.webp'}
         
         image_files = []
         for file_path in directory.iterdir():
@@ -441,7 +441,7 @@ class VideoMergerCore:
     
     def get_supported_image_formats(self) -> List[str]:
         """Get list of supported image formats."""
-        return ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.gif']
+        return ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.gif', '.webp']
     
     def create_video_from_file_pairs(self, file_pairs: List[Tuple[str, Path, Path]], 
                                     output_path: Path,
@@ -522,6 +522,7 @@ class VideoMergerCore:
                         '-ac', '2',
                         '-shortest',
                         '-pix_fmt', 'yuv420p',
+                        '-avoid_negative_ts', 'make_zero',  # Ensure proper timestamp handling
                         str(segment_file)
                     ]
                     
@@ -531,7 +532,33 @@ class VideoMergerCore:
                         raise RuntimeError(f"Failed to create segment {idx}")
                     
                     # Add silence segment between clips (except after last)
-                    if idx < len(file_pairs) - 1 and silence_duration > 0:
+                    # For the last clip, add a 2-second stall with the same image
+                    if idx == len(file_pairs) - 1:
+                        # Add 2-second stall at the end with the last image
+                        stall_file = temp_path / f"stall_end.mp4"
+                        segment_files.append(stall_file)
+                        
+                        stall_cmd = [
+                            'ffmpeg', '-y',
+                            '-loop', '1',
+                            '-i', str(image_file),
+                            '-f', 'lavfi', 
+                            '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
+                            '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2',
+                            '-c:v', 'libx264',
+                            '-t', '2',  # 2 seconds stall
+                            '-c:a', 'aac',
+                            '-pix_fmt', 'yuv420p',
+                            '-avoid_negative_ts', 'make_zero',  # Ensure proper timestamp handling
+                            str(stall_file)
+                        ]
+                        
+                        result = subprocess.run(stall_cmd, capture_output=True, text=True)
+                        if result.returncode != 0:
+                            logger.error(f"FFmpeg stall error: {result.stderr}")
+                        else:
+                            self.progress_callback("Added 2-second stall at the end")
+                    elif idx < len(file_pairs) - 1 and silence_duration > 0:
                         silence_file = temp_path / f"silence_{idx:03d}.mp4"
                         segment_files.append(silence_file)
                         
@@ -547,6 +574,7 @@ class VideoMergerCore:
                             '-t', str(silence_duration),
                             '-c:a', 'aac',
                             '-pix_fmt', 'yuv420p',
+                            '-avoid_negative_ts', 'make_zero',  # Ensure proper timestamp handling
                             str(silence_file)
                         ]
                         
@@ -554,67 +582,126 @@ class VideoMergerCore:
                         if result.returncode != 0:
                             logger.error(f"FFmpeg silence error: {result.stderr}")
                 
-                # Create concatenation list
+                # Create concatenation list for main video segments only
                 concat_file = temp_path / "concat_list.txt"
                 with open(concat_file, 'w') as f:
-                    # Add intro if provided
-                    if intro_video and intro_video.exists():
-                        # Since the intro video has been fixed, we can use it directly
-                        # Just ensure it's compatible by re-encoding with same settings as other segments
-                        processed_intro = temp_path / "intro_processed.mp4"
-                        
-                        self.progress_callback("Processing intro video...")
-                        intro_cmd = [
-                            'ffmpeg', '-y',
-                            '-i', str(intro_video),
-                            '-c:v', 'libx264',  # Re-encode to ensure compatibility
-                            '-pix_fmt', 'yuv420p',  # Standard pixel format
-                            '-c:a', 'aac',  # Re-encode audio to ensure compatibility
-                            '-b:a', '192k',
-                            '-ar', '44100',
-                            '-ac', '2',
-                            '-map', '0:v:0',  # Map video stream
-                            '-map', '0:a:0?',  # Map audio stream if it exists
-                            str(processed_intro)
-                        ]
-                        
-                        result = subprocess.run(intro_cmd, capture_output=True, text=True)
-                        
-                        if result.returncode != 0:
-                            self.progress_callback("Warning: Failed to process intro video, using original")
-                            # Try to use the original intro video directly
-                            processed_intro = intro_video
-                            result.returncode = 0  # Reset to allow inclusion
-                        
-                        if processed_intro.exists() and result.returncode == 0:
-                            f.write(f"file '{processed_intro.absolute()}'\n")
-                            self.progress_callback("Including intro video")
-                        else:
-                            self.progress_callback("Warning: Could not include intro video")
-                    
-                    # Add all video segments
+                    # Add all video segments (no intro here)
                     self.progress_callback(f"Adding {len(segment_files)} segments to concatenation list")
                     for i, segment in enumerate(segment_files):
                         f.write(f"file '{segment.absolute()}'\n")
                         self.progress_callback(f"Added segment {i+1}: {segment.name}")
                 
-                # Concatenate all segments into final video
-                self.progress_callback("Concatenating all segments...")
+                # Create the main video from segments
+                self.progress_callback("Creating main video from segments...")
                 
-                # Use copy codec since all segments are now compatible
+                # Always create main video in temp location first
+                temp_main = temp_path / "main_video.mp4"
+                
+                # Concatenate all segments into main video
                 concat_cmd = [
                     'ffmpeg', '-y',
                     '-f', 'concat',
                     '-safe', '0',
                     '-i', str(concat_file),
                     '-c', 'copy',
-                    str(output_path)
+                    str(temp_main)
                 ]
                 
                 result = subprocess.run(concat_cmd, capture_output=True, text=True)
                 if result.returncode != 0:
                     logger.error(f"FFmpeg concat error: {result.stderr}")
                     raise RuntimeError("Failed to concatenate video segments")
+                
+                self.progress_callback("Main video created successfully")
+                
+                # Stage 2: Add intro if it exists, otherwise just move main to output
+                if intro_video and intro_video.exists():
+                    self.progress_callback("Adding intro to the video using TS intermediate format...")
+                    
+                    # Convert both videos to TS format for guaranteed compatibility
+                    # This method works reliably for H.264 videos
+                    intro_ts = temp_path / "intro.ts"
+                    main_ts = temp_path / "main.ts"
+                    
+                    # Convert intro to TS
+                    self.progress_callback("Converting intro to TS format...")
+                    intro_to_ts_cmd = [
+                        'ffmpeg', '-y',
+                        '-i', str(intro_video),
+                        '-c', 'copy',
+                        '-bsf:v', 'h264_mp4toannexb',
+                        '-f', 'mpegts',
+                        str(intro_ts)
+                    ]
+                    
+                    result = subprocess.run(intro_to_ts_cmd, capture_output=True, text=True)
+                    if result.returncode != 0:
+                        logger.error(f"Failed to convert intro to TS: {result.stderr}")
+                        # Fall back to concat filter method
+                        self.progress_callback("TS conversion failed, using concat filter instead...")
+                        final_concat_cmd = [
+                            'ffmpeg', '-y',
+                            '-i', str(intro_video),
+                            '-i', str(temp_main),
+                            '-filter_complex', '[0:v:0][0:a:0][1:v:0][1:a:0]concat=n=2:v=1:a=1[outv][outa]',
+                            '-map', '[outv]',
+                            '-map', '[outa]',
+                            '-c:v', 'libx264',
+                            '-preset', 'medium',
+                            '-crf', '23',
+                            '-c:a', 'aac',
+                            '-b:a', '192k',
+                            '-movflags', '+faststart',
+                            str(output_path)
+                        ]
+                        result = subprocess.run(final_concat_cmd, capture_output=True, text=True)
+                        if result.returncode != 0:
+                            logger.error(f"Concat filter also failed: {result.stderr}")
+                            import shutil
+                            shutil.copy2(str(temp_main), str(output_path))
+                            self.progress_callback("Warning: Failed to add intro, using main video only")
+                    else:
+                        # Convert main to TS
+                        self.progress_callback("Converting main video to TS format...")
+                        main_to_ts_cmd = [
+                            'ffmpeg', '-y',
+                            '-i', str(temp_main),
+                            '-c', 'copy',
+                            '-bsf:v', 'h264_mp4toannexb',
+                            '-f', 'mpegts',
+                            str(main_ts)
+                        ]
+                        
+                        result = subprocess.run(main_to_ts_cmd, capture_output=True, text=True)
+                        if result.returncode != 0:
+                            logger.error(f"Failed to convert main to TS: {result.stderr}")
+                            import shutil
+                            shutil.copy2(str(temp_main), str(output_path))
+                            self.progress_callback("Warning: Failed to process main video, using it as-is")
+                        else:
+                            # Concatenate TS files and convert back to MP4
+                            self.progress_callback("Concatenating videos...")
+                            concat_ts_cmd = [
+                                'ffmpeg', '-y',
+                                '-i', f"concat:{intro_ts}|{main_ts}",
+                                '-c', 'copy',
+                                '-bsf:a', 'aac_adtstoasc',
+                                str(output_path)
+                            ]
+                            
+                            result = subprocess.run(concat_ts_cmd, capture_output=True, text=True)
+                            if result.returncode != 0:
+                                logger.error(f"TS concatenation failed: {result.stderr}")
+                                import shutil
+                                shutil.copy2(str(temp_main), str(output_path))
+                                self.progress_callback("Warning: Concatenation failed, using main video only")
+                            else:
+                                self.progress_callback("Successfully added intro to video")
+                else:
+                    # No intro, just move main video to output
+                    self.progress_callback("No intro provided, using main video only")
+                    import shutil
+                    shutil.move(str(temp_main), str(output_path))
                 
                 self.progress_callback("Video creation completed successfully")
                 return True

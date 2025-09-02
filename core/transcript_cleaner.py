@@ -23,6 +23,10 @@ import os
 from pathlib import Path
 from typing import Optional, Callable, List
 import anthropic
+try:
+    import openai
+except ImportError:
+    openai = None
 
 logger = logging.getLogger(__name__)
 
@@ -78,33 +82,107 @@ Output format: Cleaned, trimmed and tightened transcript only, no additional com
 Transcript to clean:
 {transcript}"""
     
-    def __init__(self, api_key: str, progress_callback: Optional[Callable[[str], None]] = None):
+    def __init__(self, api_key: str, openai_api_key: Optional[str] = None, progress_callback: Optional[Callable[[str], None]] = None):
         """
         Initialize transcript cleaner core.
         
         Args:
             api_key: Anthropic API key
+            openai_api_key: Optional OpenAI API key for fallback
             progress_callback: Optional callback function for progress updates
         """
         self.api_key = api_key
+        self.openai_api_key = openai_api_key
         self.progress_callback = progress_callback or (lambda x: None)
         self.client = None
+        self.openai_client = None
         self._init_client()
     
     def _init_client(self):
-        """Initialize Anthropic client."""
-        if not self.api_key:
-            raise ValueError("Anthropic API key is required")
+        """Initialize Anthropic client and optionally OpenAI client as fallback."""
+        if not self.api_key and not self.openai_api_key:
+            raise ValueError("At least one API key (Anthropic or OpenAI) is required")
         
-        try:
-            self.client = anthropic.Anthropic(api_key=self.api_key)
-            self.progress_callback("Anthropic client initialized")
-        except Exception as e:
-            raise RuntimeError(f"Failed to initialize Anthropic client: {e}")
+        # Try to initialize Anthropic client
+        if self.api_key:
+            try:
+                self.client = anthropic.Anthropic(api_key=self.api_key)
+                logger.debug("Anthropic client initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize Anthropic client: {e}")
+                self.client = None
+        
+        # Try to initialize OpenAI client as fallback
+        if self.openai_api_key and openai:
+            try:
+                self.openai_client = openai.OpenAI(api_key=self.openai_api_key)
+                logger.debug("OpenAI client initialized as fallback")
+            except Exception as e:
+                logger.warning(f"Failed to initialize OpenAI client: {e}")
+                self.openai_client = None
+        
+        if not self.client and not self.openai_client:
+            raise RuntimeError("Failed to initialize any AI client (Anthropic or OpenAI)")
     
     def clean_transcript_text(self, text: str) -> str:
         """
-        Clean transcript text using Claude AI.
+        Clean transcript text using Claude AI with OpenAI fallback.
+        
+        Args:
+            text: Raw transcript text to clean
+            
+        Returns:
+            Cleaned transcript text
+            
+        Raises:
+            Exception: If both API calls fail
+        """
+        # Try Anthropic first if available
+        if self.client:
+            try:
+                self.progress_callback("Sending transcript to Claude for cleaning...")
+                
+                # Create the message for Claude
+                message = self.client.messages.create(
+                    model="claude-3-5-sonnet-20241022",
+                    temperature=0.3,
+                    system=self.SYSTEM_PROMPT,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": self.USER_PROMPT_TEMPLATE.format(transcript=text)
+                        }
+                    ]
+                )
+                
+                # Extract the cleaned text from response
+                cleaned_text = message.content[0].text
+                
+                self.progress_callback("Transcript cleaning completed")
+                return cleaned_text
+                
+            except Exception as e:
+                error_msg = f"Anthropic API failed: {str(e)}"
+                logger.warning(error_msg)
+                self.progress_callback(f"Warning: {error_msg}")
+                
+                # Try OpenAI fallback if available
+                if self.openai_client:
+                    self.progress_callback("Attempting OpenAI fallback...")
+                    return self._clean_with_openai(text)
+                else:
+                    raise
+        
+        # If no Anthropic client, try OpenAI directly
+        elif self.openai_client:
+            return self._clean_with_openai(text)
+        
+        else:
+            raise RuntimeError("No AI client available for transcript cleaning")
+
+    def _clean_with_openai(self, text: str) -> str:
+        """
+        Clean transcript text using OpenAI GPT-4 as fallback.
         
         Args:
             text: Raw transcript text to clean
@@ -116,15 +194,17 @@ Transcript to clean:
             Exception: If API call fails
         """
         try:
-            self.progress_callback("Sending transcript to Claude for cleaning...")
+            self.progress_callback("Using OpenAI GPT-4 as fallback for cleaning...")
             
-            # Create the message for Claude
-            message = self.client.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=8192,
+            # Create the message for GPT-4
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4.1",  # Use latest GPT-4 model
                 temperature=0.3,
-                system=self.SYSTEM_PROMPT,
                 messages=[
+                    {
+                        "role": "system",
+                        "content": self.SYSTEM_PROMPT
+                    },
                     {
                         "role": "user",
                         "content": self.USER_PROMPT_TEMPLATE.format(transcript=text)
@@ -133,13 +213,13 @@ Transcript to clean:
             )
             
             # Extract the cleaned text from response
-            cleaned_text = message.content[0].text
+            cleaned_text = response.choices[0].message.content
             
-            self.progress_callback("Transcript cleaning completed")
+            self.progress_callback("Transcript cleaning completed (using OpenAI)")
             return cleaned_text
             
         except Exception as e:
-            error_msg = f"Failed to clean transcript: {str(e)}"
+            error_msg = f"Failed to clean transcript with OpenAI: {str(e)}"
             logger.error(error_msg)
             self.progress_callback(f"Error: {error_msg}")
             raise
