@@ -92,8 +92,8 @@ class MainApp(TkinterDnD.Tk):
         # Tool Frames
         self.pptx_translation_tool = self.create_tool_tab("PPTX Translation", PPTXTranslationTool)
         self.audio_transcription_tool = self.create_tool_tab("Audio Transcription", AudioTranscriptionTool)
-        self.text_translation_tool = self.create_tool_tab("Text Translation", TextTranslationTool)
         self.transcript_cleaner_tool = self.create_tool_tab("Clean Transcript", TranscriptCleanerTool)
+        self.text_translation_tool = self.create_tool_tab("Text Translation", TextTranslationTool)
         self.pptx_to_pdf_tool = self.create_tool_tab("PPTX to PDF/PNG/WEBP", PPTXtoPDFTool)
         self.text_to_speech_tool = self.create_tool_tab("Text to Speech", TextToSpeechTool)  
         self.video_merge_tool = self.create_tool_tab("Video Merge", VideoMergeTool)
@@ -104,8 +104,18 @@ class MainApp(TkinterDnD.Tk):
         self.bottom_frame = ttk.Frame(self.main_paned)
         self.main_paned.add(self.bottom_frame, weight=1)
 
-        self.progress_label = tk.Label(self.bottom_frame, text="Progress:")
-        self.progress_label.pack(pady=(5, 5))
+        # Create header frame with label and collapse button
+        header_frame = ttk.Frame(self.bottom_frame)
+        header_frame.pack(fill="x", padx=10, pady=(5, 5))
+        
+        self.progress_label = tk.Label(header_frame, text="Progress:")
+        self.progress_label.pack(side=tk.LEFT)
+        
+        # Add collapse/expand button
+        self.progress_collapsed = False
+        self.collapse_button = ttk.Button(header_frame, text="▼", width=3, 
+                                         command=self.toggle_progress_panel)
+        self.collapse_button.pack(side=tk.RIGHT)
 
         # Create frame for progress text and scrollbar
         self.progress_frame = ttk.Frame(self.bottom_frame)
@@ -304,6 +314,23 @@ class MainApp(TkinterDnD.Tk):
         self.progress_text.insert(tk.END, f"{message}\n")
         self.progress_text.see(tk.END)
         self.progress_text.configure(state="disabled")
+
+    def toggle_progress_panel(self):
+        """Toggle the visibility of the progress panel."""
+        if self.progress_collapsed:
+            # Expand the progress panel
+            self.progress_frame.pack(expand=True, fill="both", padx=10, pady=(0, 10))
+            self.collapse_button.config(text="▼")
+            self.progress_collapsed = False
+            # Restore the paned window weight
+            self.main_paned.pane(self.bottom_frame, weight=1)
+        else:
+            # Collapse the progress panel
+            self.progress_frame.pack_forget()
+            self.collapse_button.config(text="▲")
+            self.progress_collapsed = True
+            # Minimize the paned window weight
+            self.main_paned.pane(self.bottom_frame, weight=0)
 
     def open_api_key_config(self):
         """Open API key configuration dialog."""
