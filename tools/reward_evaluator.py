@@ -90,7 +90,7 @@ class RewardEvaluatorTool(ToolBase):
             # Display results
             if 'error' in result:
                 self.send_progress_update(f"ERROR: {result['error']}")
-                self.update_results_display()
+                # Results display will be shown in after_processing()
                 return False
             else:
                 # Handle different result formats
@@ -110,7 +110,7 @@ class RewardEvaluatorTool(ToolBase):
                     self.send_progress_update(f"   Reward: €{total_reward:.4f}")
                     self.send_progress_update(f"   Slides: {total_slides}, Text boxes: {total_text_boxes}, Words: {total_words}")
                 
-                self.update_results_display()
+                # Results display will be shown in after_processing()
                 return True
                 
         except Exception as e:
@@ -126,7 +126,7 @@ class RewardEvaluatorTool(ToolBase):
             return
         
         # Calculate summary statistics
-        summary = self.evaluator.calculate_summary(self.results)
+        summary = self.evaluator.get_summary_stats(self.results)
         
         if 'error' in summary:
             self.send_progress_update(f"Error generating summary: {summary['error']}")
