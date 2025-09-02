@@ -58,22 +58,6 @@ class RewardEvaluatorTool(ToolBase):
                        variable=self.reward_mode, 
                        value="txt").pack(side=tk.LEFT, padx=10)
         
-        # Results display frame
-        results_frame = ttk.LabelFrame(parent_frame, text="Results")
-        results_frame.pack(fill='both', expand=True, padx=5, pady=5)
-        
-        # Results text widget with scrollbar
-        text_frame = ttk.Frame(results_frame)
-        text_frame.pack(fill='both', expand=True, padx=5, pady=5)
-        
-        self.results_text = tk.Text(text_frame, height=10, wrap=tk.WORD)
-        results_scrollbar = ttk.Scrollbar(text_frame, orient="vertical", 
-                                        command=self.results_text.yview)
-        self.results_text.configure(yscrollcommand=results_scrollbar.set)
-        
-        self.results_text.pack(side=tk.LEFT, fill='both', expand=True)
-        results_scrollbar.pack(side=tk.RIGHT, fill='y')
-        
         # CSV export button
         export_frame = ttk.Frame(parent_frame)
         export_frame.pack(fill='x', padx=5, pady=5)
@@ -82,12 +66,11 @@ class RewardEvaluatorTool(ToolBase):
                                        command=self.export_to_csv, state=tk.DISABLED)
         self.export_button.pack(side=tk.LEFT, padx=5)
 
+
+
     def before_processing(self):
         """Setup before processing starts."""
         self.results = []
-        self.results_text.configure(state='normal')
-        self.results_text.delete(1.0, tk.END)
-        self.results_text.configure(state='disabled')
         self.export_button.configure(state=tk.DISABLED)
 
     def process_file(self, input_file: Path, output_dir: Path):
@@ -137,78 +120,69 @@ class RewardEvaluatorTool(ToolBase):
             return False
 
     def update_results_display(self):
-        """Update the results display widget."""
-        self.results_text.configure(state='normal')
-        self.results_text.delete(1.0, tk.END)
-        
+        """Update the results display - now just logs to progress."""
         if not self.results:
-            self.results_text.insert(tk.END, "No results yet...")
-            self.results_text.configure(state='disabled')
+            self.send_progress_update("No results yet...")
             return
         
-        # Get summary stats
-        summary = self.evaluator.get_summary_stats(self.results)
+        # Calculate summary statistics
+        summary = self.evaluator.calculate_summary(self.results)
         
         if 'error' in summary:
-            self.results_text.insert(tk.END, f"Error generating summary: {summary['error']}\n")
-            self.results_text.configure(state='disabled')
+            self.send_progress_update(f"Error generating summary: {summary['error']}")
             return
         
-        # Header
-        file_type = summary.get('file_type', 'Unknown')
-        self.results_text.insert(tk.END, f"{file_type} Reward Evaluation Results\n")
-        self.results_text.insert(tk.END, f"="*50 + "\n\n")
-        self.results_text.insert(tk.END, f"Total Files: {summary['total_files']}\n")
+        # Display summary in progress
+        file_type = "TXT" if self.reward_mode.get() == 'txt' else "PPTX"
         
-        if file_type == 'PPTX':
-            self.results_text.insert(tk.END, f"Total Slides: {summary['total_slides']}\n")
-            self.results_text.insert(tk.END, f"Total Text Boxes: {summary['total_text_boxes']}\n")
-            self.results_text.insert(tk.END, f"Total Words: {summary['total_words']}\n")
+        self.send_progress_update(f"\n{file_type} Reward Evaluation Results")
+        self.send_progress_update("="*50)
+        self.send_progress_update(f"Total Files: {summary['total_files']}")
+        
+        if file_type == "PPTX":
+            self.send_progress_update(f"Total Slides: {summary['total_slides']}")
+            self.send_progress_update(f"Total Text Boxes: {summary['total_text_boxes']}")
+            self.send_progress_update(f"Total Words: {summary['total_words']}")
         else:
-            self.results_text.insert(tk.END, f"Total Words: {summary['total_words']}\n")
-            self.results_text.insert(tk.END, f"Avg Words/File: {summary['average_words_per_file']}\n")
+            self.send_progress_update(f"Total Words: {summary['total_words']}")
+            self.send_progress_update(f"Avg Words/File: {summary['average_words_per_file']}")
         
-        self.results_text.insert(tk.END, f"Total Reward: €{summary['total_reward_euros']:.4f}\n")
-        self.results_text.insert(tk.END, f"Avg Reward/File: €{summary['average_reward_per_file']:.4f}\n\n")
+        self.send_progress_update(f"Total Reward: €{summary['total_reward_euros']:.4f}")
+        self.send_progress_update(f"Avg Reward/File: €{summary['average_reward_per_file']:.4f}")
         
-        # Individual results
+        # Display individual file results in progress
+        self.send_progress_update("\nIndividual File Results:")
+        self.send_progress_update("-"*30)
+        
         for result in self.results:
-            if self.reward_mode.get() == 'txt':
-                filename = result.get('file_path', 'Unknown')
-                if filename != 'Unknown':
-                    filename = Path(filename).name
-                
-                if 'error' in result:
-                    self.results_text.insert(tk.END, f"❌ {filename}: {result['error']}\n")
-                else:
+            if 'error' in result:
+                filename = result.get('filename', result.get('file_path', 'Unknown'))
+                self.send_progress_update(f"❌ {filename}: {result['error']}")
+            else:
+                if self.reward_mode.get() == 'txt':
+                    filename = result.get('file_path', 'Unknown')
                     reward = result.get('reward_euros', 0)
                     words = result.get('word_count', 0)
-                    difficulty = result.get('difficulty_factor', 1.0)
-                    target_lang = result.get('target_language', 'unknown')
+                    target_lang = result.get('target_language', 'N/A')
+                    difficulty = result.get('difficulty_factor', 0)
                     
-                    self.results_text.insert(tk.END, f"✅ {filename}\n")
-                    self.results_text.insert(tk.END, f"   Reward: €{reward:.4f}\n")
-                    self.results_text.insert(tk.END, f"   Words: {words}\n")
-                    self.results_text.insert(tk.END, f"   Target Language: {target_lang}\n")
-                    self.results_text.insert(tk.END, f"   Difficulty Factor: {difficulty}\n\n")
-            else:
-                # PPTX mode
-                filename = result.get('filename', 'Unknown')
-                if 'error' in result:
-                    self.results_text.insert(tk.END, f"❌ {filename}: {result['error']}\n")
+                    self.send_progress_update(f"✅ {filename}")
+                    self.send_progress_update(f"   Reward: €{reward:.4f}")
+                    self.send_progress_update(f"   Words: {words}")
+                    self.send_progress_update(f"   Target Language: {target_lang}")
+                    self.send_progress_update(f"   Difficulty Factor: {difficulty}")
                 else:
+                    filename = result.get('filename', 'Unknown')
                     reward = result.get('total_reward', 0)
                     slides = result.get('total_slides', 0)
                     text_boxes = result.get('total_text_boxes', 0)
                     words = result.get('total_words', 0)
                     mode = result.get('mode', 'unknown')
                     
-                    self.results_text.insert(tk.END, f"✅ {filename}\n")
-                    self.results_text.insert(tk.END, f"   Reward: €{reward:.4f}\n")
-                    self.results_text.insert(tk.END, f"   Slides: {slides}, Text boxes: {text_boxes}, Words: {words}\n")
-                    self.results_text.insert(tk.END, f"   Mode: {mode}\n\n")
-        
-        self.results_text.configure(state='disabled')
+                    self.send_progress_update(f"✅ {filename}")
+                    self.send_progress_update(f"   Reward: €{reward:.4f}")
+                    self.send_progress_update(f"   Slides: {slides}, Text boxes: {text_boxes}, Words: {words}")
+                    self.send_progress_update(f"   Mode: {mode}")
         
         # Enable export button if we have results
         if self.results:
