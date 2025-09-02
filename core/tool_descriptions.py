@@ -319,3 +319,21 @@ def get_tool_list_for_gui():
         })
     
     return tools
+
+def get_all_descriptions():
+    """
+    Get all tool descriptions formatted for overview display.
+    
+    Returns:
+        dict: All tool descriptions with details
+    """
+    return get_tool_descriptions()
+
+def get_all_api_requirements():
+    """
+    Get all API requirements formatted for display.
+    
+    Returns:
+        dict: All tool API requirements
+    """
+    return get_tool_requirements()

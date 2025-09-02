@@ -346,11 +346,16 @@ class MainApp(TkinterDnD.Tk):
             
             overview_window = tk.Toplevel(self)
             overview_window.title("Tool Overview")
-            overview_window.geometry("700x500")
+            overview_window.geometry("800x600")
+            overview_window.resizable(True, True)
+            
+            # Make it modal
+            overview_window.transient(self)
+            overview_window.grab_set()
             
             # Title
             title = tk.Label(overview_window, text="Language Toolkit - Tool Overview",
-                           font=("Arial", 14, "bold"))
+                           font=("Arial", 16, "bold"))
             title.pack(pady=10)
             
             # Scrollable frame
@@ -366,15 +371,37 @@ class MainApp(TkinterDnD.Tk):
             canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
             canvas.configure(yscrollcommand=scrollbar.set)
             
-            for tool_name, desc in descriptions.items():
-                tool_frame = ttk.LabelFrame(scrollable_frame, text=tool_name.replace("_", " ").title(), padding=10)
-                tool_frame.pack(fill="x", padx=10, pady=5)
+            # Display each tool with proper formatting
+            for tool_name, tool_info in descriptions.items():
+                # Create frame for each tool
+                tool_frame = ttk.LabelFrame(scrollable_frame, 
+                                           text=tool_info.get("title", tool_name.replace("_", " ").title()), 
+                                           padding=15)
+                tool_frame.pack(fill="x", padx=15, pady=8)
                 
-                desc_label = tk.Label(tool_frame, text=desc, font=("Arial", 9), wraplength=650, justify="left")
-                desc_label.pack(anchor="w")
+                # Description
+                desc_text = tool_info.get("description", "")
+                if desc_text:
+                    desc_label = tk.Label(tool_frame, text=desc_text, 
+                                        font=("Arial", 10, "bold"), 
+                                        wraplength=730, justify="left")
+                    desc_label.pack(anchor="w", pady=(0, 5))
+                
+                # Details
+                details_text = tool_info.get("details", "")
+                if details_text:
+                    details_label = tk.Label(tool_frame, text=details_text, 
+                                           font=("Arial", 9), 
+                                           wraplength=730, justify="left",
+                                           fg="gray30")
+                    details_label.pack(anchor="w")
             
-            canvas.pack(side="left", fill="both", expand=True, padx=(10, 0))
-            scrollbar.pack(side="right", fill="y", padx=(0, 10))
+            canvas.pack(side="left", fill="both", expand=True, padx=(10, 0), pady=(0, 10))
+            scrollbar.pack(side="right", fill="y", padx=(0, 10), pady=(0, 10))
+            
+            # Close button
+            close_btn = ttk.Button(overview_window, text="Close", command=overview_window.destroy)
+            close_btn.pack(pady=10)
             
         except Exception as e:
             messagebox.showerror("Error", f"Could not show tool overview: {e}")
@@ -387,11 +414,16 @@ class MainApp(TkinterDnD.Tk):
             
             req_window = tk.Toplevel(self)
             req_window.title("API Requirements")
-            req_window.geometry("600x400")
+            req_window.geometry("700x500")
+            req_window.resizable(True, True)
+            
+            # Make it modal
+            req_window.transient(self)
+            req_window.grab_set()
             
             # Title
             title = tk.Label(req_window, text="API Key Requirements by Tool",
-                           font=("Arial", 14, "bold"))
+                           font=("Arial", 16, "bold"))
             title.pack(pady=10)
             
             # Instructions
@@ -413,25 +445,48 @@ class MainApp(TkinterDnD.Tk):
             canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
             canvas.configure(yscrollcommand=scrollbar.set)
             
+            # Display requirements for each tool
             for tool_name, req in requirements.items():
-                tool_frame = ttk.LabelFrame(scrollable_frame, text=tool_name.replace("_", " ").title(), padding=10)
-                tool_frame.pack(fill="x", padx=10, pady=5)
-                
-                if req["api_required"]:
-                    req_label = tk.Label(tool_frame, text=f"Required: {req['api_required']}", 
-                                       font=("Arial", 10, "bold"), fg="red")
-                    req_label.pack(anchor="w")
+                # Use the tool title if available
+                tool_title = tool_name.replace("_", " ").title()
+                if tool_name == "pptx_to_pdf_png":
+                    tool_title = "PPTX Export"
+                elif tool_name == "pptx_translation":
+                    tool_title = "PPTX Translation"
                     
-                    desc_label = tk.Label(tool_frame, text=req["api_description"], 
-                                        font=("Arial", 9), fg="gray40")
-                    desc_label.pack(anchor="w")
+                tool_frame = ttk.LabelFrame(scrollable_frame, text=tool_title, padding=12)
+                tool_frame.pack(fill="x", padx=15, pady=5)
+                
+                if req.get("api_required"):
+                    # API required label
+                    req_label = tk.Label(tool_frame, 
+                                       text=f"✓ Required: {req['api_required']}", 
+                                       font=("Arial", 10, "bold"), 
+                                       fg="darkblue")
+                    req_label.pack(anchor="w", pady=(0, 3))
+                    
+                    # API description
+                    if req.get("api_description"):
+                        desc_label = tk.Label(tool_frame, 
+                                            text=req["api_description"], 
+                                            font=("Arial", 9), 
+                                            fg="gray30",
+                                            wraplength=630,
+                                            justify="left")
+                        desc_label.pack(anchor="w")
                 else:
-                    no_req_label = tk.Label(tool_frame, text="No API key required", 
-                                          font=("Arial", 10), fg="green")
+                    no_req_label = tk.Label(tool_frame, 
+                                          text="✓ No API key required", 
+                                          font=("Arial", 10), 
+                                          fg="darkgreen")
                     no_req_label.pack(anchor="w")
             
-            canvas.pack(side="left", fill="both", expand=True, padx=(10, 0))
-            scrollbar.pack(side="right", fill="y", padx=(0, 10))
+            canvas.pack(side="left", fill="both", expand=True, padx=(10, 0), pady=(0, 10))
+            scrollbar.pack(side="right", fill="y", padx=(0, 10), pady=(0, 10))
+            
+            # Close button
+            close_btn = ttk.Button(req_window, text="Close", command=req_window.destroy)
+            close_btn.pack(pady=10)
             
         except Exception as e:
             messagebox.showerror("Error", f"Could not show API requirements: {e}")

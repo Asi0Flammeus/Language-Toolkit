@@ -87,7 +87,7 @@ class AudioTranscriptionCore:
         
         try:
             self.client = openai.OpenAI(api_key=self.api_key)
-            self.progress_callback("OpenAI client initialized")
+            logger.debug("OpenAI client initialized")
         except Exception as e:
             raise RuntimeError(f"Failed to initialize OpenAI client: {e}")
     

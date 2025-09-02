@@ -51,17 +51,16 @@ class VideoMergeTool(ToolBase):
             if result.returncode == 0:
                 self.dependencies_met = True
                 version_info = result.stdout.split('\n')[0]
-                logging.info(f"Found ffmpeg: {version_info}")
+                logging.debug(f"Found ffmpeg: {version_info}")
             else:
-                logging.error("ffmpeg command returned non-zero exit code")
-                self.send_progress_update("ERROR: ffmpeg command failed")
+                logging.debug("ffmpeg command returned non-zero exit code")
+                # Don't send progress update during initialization
         except FileNotFoundError:
-            error_msg = "ffmpeg not found in PATH. Please install ffmpeg first."
-            logging.error(error_msg)
-            self.send_progress_update(f"ERROR: {error_msg}")
+            logging.debug("ffmpeg not found in PATH")
+            # Don't send progress update during initialization
         except Exception as e:
-            logging.error(f"Error checking ffmpeg: {str(e)}")
-            self.send_progress_update(f"ERROR: Failed to check ffmpeg: {str(e)}")
+            logging.debug(f"Error checking ffmpeg: {str(e)}")
+            # Don't send progress update during initialization
             
     def create_selection_mode_controls(self, parent_frame):
         """Override to only show folder selection mode."""
@@ -103,6 +102,8 @@ class VideoMergeTool(ToolBase):
         if not self.dependencies_met:
             self._check_dependencies()  # Check again in case user installed ffmpeg
             if not self.dependencies_met:
+                # Now it's appropriate to inform the user since they're trying to process
+                self.send_progress_update("ERROR: ffmpeg not found in PATH. Please install ffmpeg first.")
                 raise ImportError("ffmpeg not found. Please install ffmpeg and make sure it's in your PATH.")
 
     def process_file(self, input_file, output_dir):
