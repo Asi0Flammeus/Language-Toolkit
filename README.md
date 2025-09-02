@@ -118,6 +118,26 @@ Create `supported_languages.json`:
 
 ## 🖥️ Usage
 
+### Quick Start Script
+
+Use the provided script to pull latest changes and start the application:
+
+**Linux/Mac:**
+```bash
+./start_app.sh
+```
+
+**Windows:**
+```batch
+start_app.bat
+```
+
+The startup script will:
+1. Pull latest changes from git
+2. Detect and activate the virtual environment (venv or env)
+3. Update dependencies from requirements.txt
+4. Start the GUI application
+
 ### GUI Application
 
 1. Launch the application: `python main.py`
