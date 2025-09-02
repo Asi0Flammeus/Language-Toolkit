@@ -98,7 +98,6 @@ Transcript to clean:
         
         try:
             self.client = anthropic.Anthropic(api_key=self.api_key)
-            self.progress_callback("Anthropic client initialized")
         except Exception as e:
             raise RuntimeError(f"Failed to initialize Anthropic client: {e}")
     
