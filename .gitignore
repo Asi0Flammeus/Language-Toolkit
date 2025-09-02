@@ -1,20 +1,9 @@
-playground.py
 __pycache__/
-.bashrc
-.bash_profile
 .env
-env/
-outputs/
-playground.py
-api_keys.json
-test-app/
-elevenlabs_voices.json
-api-test-app/node_modules
-# Deprecated authentication files (now using .env)
-# auth_tokens.json (deprecated - use .env)
-# client_credentials.json (deprecated - use .env)
-data/*
-venv
-
 .serena
-test-clean
+.claude
+env/
+venv/
+outputs/
+data/*
+tests/
