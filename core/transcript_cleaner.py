@@ -107,7 +107,7 @@ Transcript to clean:
         if self.api_key:
             try:
                 self.client = anthropic.Anthropic(api_key=self.api_key)
-                self.progress_callback("Anthropic client initialized")
+                logger.debug("Anthropic client initialized")
             except Exception as e:
                 logger.warning(f"Failed to initialize Anthropic client: {e}")
                 self.client = None
@@ -116,7 +116,7 @@ Transcript to clean:
         if self.openai_api_key and openai:
             try:
                 self.openai_client = openai.OpenAI(api_key=self.openai_api_key)
-                self.progress_callback("OpenAI client initialized as fallback")
+                logger.debug("OpenAI client initialized as fallback")
             except Exception as e:
                 logger.warning(f"Failed to initialize OpenAI client: {e}")
                 self.openai_client = None
