@@ -33,11 +33,8 @@ class VideoMergeTool(ToolBase):
         
         # Intro/Outro options
         self.use_intro = tk.BooleanVar(value=False)
-        self.use_outro = tk.BooleanVar(value=False)
-        
-        # Paths to intro/outro media files
+        # Path to intro media file
         self.intro_path = Path(__file__).parent.parent / "media" / "planB_intro.mp4"
-        self.outro_path = Path(__file__).parent.parent / "media" / "pbn_outro.mp3"
         
         # Check dependencies
         self._check_dependencies()
@@ -90,18 +87,7 @@ class VideoMergeTool(ToolBase):
                                      text="Add Plan B intro to beginning",
                                      variable=self.use_intro)
         intro_check.pack(anchor='w', padx=10, pady=5)
-        
-        # Outro option  
-        outro_check = ttk.Checkbutton(options_frame,
-                                     text="Use PBN outro audio for last slide",
-                                     variable=self.use_outro)
-        outro_check.pack(anchor='w', padx=10, pady=5)
-        
-        # Note about outro behavior
-        outro_note = ttk.Label(options_frame, 
-                              text="Note: When outro is enabled, the last slide will use the outro audio instead of its MP3 file",
-                              font=('TkDefaultFont', 9, 'italic'))
-        outro_note.pack(anchor='w', padx=25, pady=(0, 5))
+
         
     def select_input_paths(self):
         """Override to only allow folder selection."""
@@ -265,15 +251,7 @@ class VideoMergeTool(ToolBase):
             else:
                 self.send_progress_update(f"No PNG match for MP3 index {idx}: {mp3_file.name}")
 
-        # If outro is enabled, also include PNG files without MP3 matches
-        # These will use the outro audio
-        if self.use_outro.get():
-            for idx in sorted(png_dict.keys(), key=lambda x: int(x)):
-                if idx not in matched_png_indices:
-                    png_file = png_dict[idx]
-                    self.send_progress_update(f"PNG without MP3 match (will use outro): {png_file.name}")
-                    # Use None as placeholder for MP3 file
-                    file_pairs.append((idx, None, png_file))
+
 
         # Return pairs sorted by numeric index
         return sorted(file_pairs, key=lambda x: int(x[0]))
@@ -282,7 +260,7 @@ class VideoMergeTool(ToolBase):
     def create_video_with_ffmpeg(self, file_pairs, output_file):
         """
         Create a video from matched MP3/PNG pairs using the VideoMergerCore.
-        Handles adding silence between clips and intro/outro.
+        Handles adding silence between clips and intro.
         """
         from core.video_merger import VideoMergerCore
         
@@ -302,9 +280,8 @@ class VideoMergeTool(ToolBase):
             # Initialize video merger
             merger = VideoMergerCore(progress_callback)
             
-            # Prepare intro/outro paths
+            # Prepare intro path
             intro_video = self.intro_path if self.use_intro.get() and self.intro_path.exists() else None
-            outro_audio = self.outro_path if self.use_outro.get() and self.outro_path.exists() else None
             
             # Use the new create_video_from_file_pairs method
             success = merger.create_video_from_file_pairs(
@@ -312,7 +289,7 @@ class VideoMergeTool(ToolBase):
                 output_path=output_file,
                 silence_duration=0.2,  # 0.2 seconds silence between clips
                 intro_video=intro_video,
-                outro_audio=outro_audio
+                outro_audio=None
             )
             
             if not success:
