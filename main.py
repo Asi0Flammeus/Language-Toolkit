@@ -94,7 +94,7 @@ class MainApp(TkinterDnD.Tk):
         self.audio_transcription_tool = self.create_tool_tab("Audio Transcription", AudioTranscriptionTool)
         self.transcript_cleaner_tool = self.create_tool_tab("Clean Transcript", TranscriptCleanerTool)
         self.text_translation_tool = self.create_tool_tab("Text Translation", TextTranslationTool)
-        self.pptx_to_pdf_tool = self.create_tool_tab("PPTX to PDF/PNG/WEBP", PPTXtoPDFTool)
+        self.pptx_to_pdf_tool = self.create_tool_tab("PPTX Export", PPTXtoPDFTool)
         self.text_to_speech_tool = self.create_tool_tab("Text to Speech", TextToSpeechTool)  
         self.video_merge_tool = self.create_tool_tab("Video Merge", VideoMergeTool)
         self.sequential_tool = self.create_tool_tab("Sequential Processing", SequentialProcessingTool)

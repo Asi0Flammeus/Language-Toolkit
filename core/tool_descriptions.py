@@ -35,8 +35,8 @@ def get_tool_descriptions():
         },
         
         "pptx_to_pdf_png": {
-            "title": "PPTX to PDF/PNG",
-            "description": "Convert PowerPoint presentations to PDF documents or PNG images",
+            "title": "PPTX Export",
+            "description": "Export PowerPoint presentations to PDF documents, PNG, or WEBP images",
             "details": "Creates high-quality PDF files or individual slide images from your presentations",
             "use_case": "Useful for sharing presentations or creating print-ready materials"
         },
