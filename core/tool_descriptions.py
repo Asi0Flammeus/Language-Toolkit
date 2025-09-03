@@ -55,11 +55,11 @@ def get_tool_descriptions():
             "use_case": "Great for creating presentations, slideshows, or combining video clips"
         },
         
-        "sequential_processing": {
-            "title": "Sequential Processing",
-            "description": "Run multiple tools in sequence for complete workflow automation",
-            "details": "Chains together translation, conversion, and audio generation for end-to-end processing",
-            "use_case": "Automates complex workflows like creating multilingual video presentations"
+        "sequential_video_processing": {
+            "title": "Sequential Video Processing",
+            "description": "Complete video production workflow for multilingual content",
+            "details": "Orchestrates PPTX translation, PNG export, text translation, audio generation, and video creation",
+            "use_case": "Automates creation of multilingual video presentations from PowerPoint and text files"
         },
         
         "reward_evaluator": {
@@ -115,9 +115,9 @@ def get_tool_requirements():
             "api_description": "No API key required (uses local FFmpeg)"
         },
         
-        "sequential_processing": {
+        "sequential_video_processing": {
             "api_required": "Multiple",
-            "api_description": "Requires API keys for the selected tools in the sequence"
+            "api_description": "Requires DeepL, ConvertAPI, and ElevenLabs API keys"
         },
         
         "reward_evaluator": {
@@ -175,10 +175,10 @@ def get_supported_formats():
             "notes": "Images for slideshow creation, videos for merging"
         },
         
-        "sequential_processing": {
-            "input": ["Various"],
-            "output": ["Various"],
-            "notes": "Depends on selected tools in the sequence"
+        "sequential_video_processing": {
+            "input": [".pptx", ".txt"],
+            "output": [".mp4", ".png", ".mp3"],
+            "notes": "Processes presentations and text into multilingual videos"
         },
         
         "reward_evaluator": {
@@ -238,10 +238,10 @@ def get_quick_tips():
             "FFmpeg must be installed for video processing"
         ],
         
-        "sequential_processing": [
-            "Configure all required API keys before starting",
-            "Review the processing order before running",
-            "Total time depends on all selected operations"
+        "sequential_video_processing": [
+            "Configure DeepL, ConvertAPI, and ElevenLabs keys",
+            "Select multiple target languages for batch processing",
+            "Enable intro video option for professional presentations"
         ],
         
         "reward_evaluator": [

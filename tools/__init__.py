@@ -16,7 +16,7 @@ spec = importlib.util.spec_from_file_location(
 )
 sequential_processing_module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sequential_processing_module)
-SequentialProcessingTool = sequential_processing_module.SequentialProcessingTool
+SequentialVideoProcessingTool = sequential_processing_module.SequentialVideoProcessingTool
 from .reward_evaluator import RewardEvaluatorTool
 
 __all__ = [
@@ -27,6 +27,6 @@ __all__ = [
     'PPTXtoPDFTool',
     'TranscriptCleanerTool',
     'VideoMergeTool',
-    'SequentialProcessingTool',
+    'SequentialVideoProcessingTool',
     'RewardEvaluatorTool'
 ]

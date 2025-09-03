@@ -1,4 +1,4 @@
-"""Sequential processing tool for multiple language workflows."""
+"""Sequential Video Processing tool for comprehensive media workflow."""
 
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -11,8 +11,8 @@ from ui.mixins import LanguageSelectionMixin
 from tools.sequential_processing.sequential_orchestrator import SequentialOrchestrator
 
 
-class SequentialProcessingTool(ToolBase, LanguageSelectionMixin):
-    """Tool for processing files through multiple language translations sequentially."""
+class SequentialVideoProcessingTool(ToolBase, LanguageSelectionMixin):
+    """Sequential Video Processing tool for comprehensive media workflow."""
     
     def __init__(self, master, config_manager, progress_queue):
         super().__init__(master, config_manager, progress_queue)

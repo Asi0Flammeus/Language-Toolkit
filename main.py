@@ -25,7 +25,7 @@ from tools import (
     PPTXtoPDFTool,
     TranscriptCleanerTool,
     VideoMergeTool,
-    SequentialProcessingTool,
+    SequentialVideoProcessingTool,
     RewardEvaluatorTool
 )
 
@@ -97,7 +97,7 @@ class MainApp(TkinterDnD.Tk):
         self.pptx_to_pdf_tool = self.create_tool_tab("PPTX Export", PPTXtoPDFTool)
         self.text_to_speech_tool = self.create_tool_tab("Text to Speech", TextToSpeechTool)  
         self.video_merge_tool = self.create_tool_tab("Video Merge", VideoMergeTool)
-        self.sequential_tool = self.create_tool_tab("Sequential Processing", SequentialProcessingTool)
+        self.sequential_tool = self.create_tool_tab("SVP", SequentialVideoProcessingTool)
         self.reward_evaluator_tool = self.create_tool_tab("Reward Evaluator", RewardEvaluatorTool)
 
         # Bottom pane: Progress Text Area
@@ -141,7 +141,7 @@ class MainApp(TkinterDnD.Tk):
             PPTXtoPDFTool: "pptx_to_pdf_png",
             TextToSpeechTool: "text_to_speech",
             VideoMergeTool: "video_merge",
-            SequentialProcessingTool: "sequential_processing",
+            SequentialVideoProcessingTool: "sequential_video_processing",
             RewardEvaluatorTool: "reward_evaluator",
             TranscriptCleanerTool: "transcript_cleaner"
         }
