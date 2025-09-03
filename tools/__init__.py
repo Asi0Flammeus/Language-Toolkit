@@ -7,7 +7,16 @@ from .text_translation import TextTranslationTool
 from .pptx_to_pdf import PPTXtoPDFTool
 from .transcript_cleaner import TranscriptCleanerTool
 from .video_merge import VideoMergeTool
-from .sequential_processing import SequentialProcessingTool
+# Import from the module file directly to avoid conflict with package
+import importlib.util
+import os
+spec = importlib.util.spec_from_file_location(
+    "sequential_processing_module",
+    os.path.join(os.path.dirname(__file__), "sequential_processing.py")
+)
+sequential_processing_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sequential_processing_module)
+SequentialProcessingTool = sequential_processing_module.SequentialProcessingTool
 from .reward_evaluator import RewardEvaluatorTool
 
 __all__ = [

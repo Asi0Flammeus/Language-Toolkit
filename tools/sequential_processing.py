@@ -8,6 +8,7 @@ from pathlib import Path
 
 from ui.base_tool import ToolBase
 from ui.mixins import LanguageSelectionMixin
+from tools.sequential_processing.sequential_orchestrator import SequentialOrchestrator
 
 
 class SequentialProcessingTool(ToolBase, LanguageSelectionMixin):
@@ -27,18 +28,25 @@ class SequentialProcessingTool(ToolBase, LanguageSelectionMixin):
         # Force selection mode to folder
         self.selection_mode = tk.StringVar(value="folder")
         
-        # Initialize sub-tools - Import them here to avoid circular imports
-        from tools.pptx_translation import PPTXTranslationTool
-        from tools.pptx_to_pdf import PPTXtoPDFTool
-        from tools.text_translation import TextTranslationTool
-        from tools.text_to_speech import TextToSpeechTool
-        from tools.video_merge import VideoMergeTool
+        # Video options
+        self.use_intro = tk.BooleanVar(value=False)
         
-        self.pptx_translation_tool = PPTXTranslationTool(master, config_manager, progress_queue)
-        self.pptx_export_tool = PPTXtoPDFTool(master, config_manager, progress_queue)
-        self.text_translation_tool = TextTranslationTool(master, config_manager, progress_queue)
-        self.text_to_speech_tool = TextToSpeechTool(master, config_manager, progress_queue)
-        self.video_merge_tool = VideoMergeTool(master, config_manager, progress_queue)
+        # Initialize the orchestrator with API keys from config
+        api_keys = config_manager.get_api_keys()
+        orchestrator_config = {
+            'deepl_api_key': api_keys.get('deepl'),
+            'convertapi_key': api_keys.get('convertapi'),
+            'elevenlabs_api_key': api_keys.get('elevenlabs')
+        }
+        
+        # Create orchestrator with progress callback
+        self.orchestrator = SequentialOrchestrator(
+            config=orchestrator_config,
+            progress_callback=self.send_progress_update
+        )
+        
+        # Get supported languages from orchestrator
+        self.supported_languages = self.orchestrator.get_supported_languages()
 
     def create_language_selection(self):
         """Creates enhanced language selection UI with multiple target language support."""
@@ -77,6 +85,25 @@ class SequentialProcessingTool(ToolBase, LanguageSelectionMixin):
             state='disabled'
         )
         self.selected_langs_display.pack(side=tk.LEFT, padx=5, pady=5, fill='x', expand=True)
+
+    def create_specific_controls(self, frame):
+        """Creates tool-specific controls including video options."""
+        # Create video options
+        self.create_video_options()
+    
+    def create_video_options(self):
+        """Creates video options UI section."""
+        # Video options frame
+        self.video_frame = ttk.LabelFrame(self.master, text="Video Options")
+        self.video_frame.pack(fill='x', padx=5, pady=5)
+        
+        # Add intro checkbox
+        self.intro_checkbox = ttk.Checkbutton(
+            self.video_frame,
+            text="Add Plan B intro to beginning",
+            variable=self.use_intro
+        )
+        self.intro_checkbox.pack(side=tk.LEFT, padx=10, pady=5)
 
     def open_target_language_selector(self):
         """Opens a dialog for selecting multiple target languages."""
@@ -197,52 +224,59 @@ class SequentialProcessingTool(ToolBase, LanguageSelectionMixin):
         self.processing_thread.start()
 
     def _process_multiple_languages(self):
-        """Process all selected target languages sequentially."""
+        """Process all selected target languages sequentially using the orchestrator."""
         try:
             self.before_processing()
             
-            for target_lang in sorted(self.selected_target_langs):
-                if self.stop_flag.is_set():
-                    self.send_progress_update("Processing stopped by user")
-                    return
-                
-                self.send_progress_update(f"\nProcessing target language: {target_lang}")
-                self.target_lang.set(target_lang)
-                
-                # Create language-specific output directory
-                lang_output_dir = self.output_path / target_lang
-                lang_output_dir.mkdir(parents=True, exist_ok=True)
-                
-                # Process all files for this language
-                if self.selection_mode.get() == "folder":
-                    for input_path in self.input_paths:
-                        files = self.get_all_files_recursive(input_path)
-                        for file_path in files:
-                            if self.stop_flag.is_set():
-                                return
-                            self.process_file(file_path, lang_output_dir)
-                else:
-                    for file_path in self.input_paths:
-                        if self.stop_flag.is_set():
-                            return
-                        self.process_file(file_path, lang_output_dir)
+            # Set the stop flag on the orchestrator
+            self.orchestrator.stop_flag = self.stop_flag
             
-            self.after_processing()
+            # Process using the orchestrator
+            # Assume single input path for folder mode
+            input_path = self.input_paths[0] if self.input_paths else None
+            
+            if not input_path:
+                self.send_progress_update("❌ No input path selected")
+                return
+            
+            success = self.orchestrator.process_folder(
+                input_path=input_path,
+                output_path=self.output_path,
+                source_lang=self.source_lang.get(),
+                target_langs=list(self.selected_target_langs),
+                use_intro=self.use_intro.get()
+            )
+            
+            if success:
+                self.after_processing()
+            else:
+                self.send_progress_update("⚠️ Processing completed with errors")
             
         except Exception as e:
-            self.send_progress_update(f"Error during processing: {str(e)}")
-            logging.exception("Error during multiple language processing")
+            self.send_progress_update(f"❌ Error during processing: {str(e)}")
+            logging.exception("Error during orchestrated processing")
 
-    def process_file(self, input_file: Path, output_dir: Path):
-        """Process a file using the appropriate sub-tool based on extension."""
-        # Use the PPTX translation tool as the primary processor
-        # You can extend this to use different tools based on file type
-        if input_file.suffix.lower() == '.pptx':
-            # Set the target language for the sub-tool
-            self.pptx_translation_tool.source_lang.set(self.source_lang.get())
-            self.pptx_translation_tool.target_lang.set(self.target_lang.get())
-            self.pptx_translation_tool.check_output_exists = self.check_output_exists
-            self.pptx_translation_tool.stop_flag = self.stop_flag
-            
-            # Process the file
-            self.pptx_translation_tool.process_file(input_file, output_dir)
+    def stop_processing(self):
+        """Stop the current processing operation."""
+        super().stop_processing()
+        # Also stop the orchestrator
+        if hasattr(self, 'orchestrator'):
+            self.orchestrator.stop_processing()
+    
+    def validate_configuration(self):
+        """Validate that all required tools are available."""
+        if not hasattr(self, 'orchestrator'):
+            return False
+        
+        availability = self.orchestrator.validate_configuration()
+        
+        missing_tools = [tool for tool, available in availability.items() if not available]
+        
+        if missing_tools:
+            self.send_progress_update(
+                f"⚠️ Missing API keys for: {', '.join(missing_tools)}\n"
+                "Please configure API keys in settings."
+            )
+            return False
+        
+        return True
