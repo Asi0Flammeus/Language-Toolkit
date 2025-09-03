@@ -90,7 +90,7 @@ class SequentialOrchestrator:
     
     def process_folder(self, input_path: Path, output_path: Path,
                       source_lang: str, target_langs: List[str],
-                      use_intro: bool = False) -> bool:
+                      use_intro: bool = False, skip_existing: bool = True) -> bool:
         """
         Process a folder through all selected languages.
         
@@ -100,6 +100,7 @@ class SequentialOrchestrator:
             source_lang: Source language code
             target_langs: List of target language codes
             use_intro: Whether to add intro video to generated videos
+            skip_existing: Whether to skip files that already exist
             
         Returns:
             True if successful, False if interrupted or failed
@@ -160,7 +161,8 @@ class SequentialOrchestrator:
                         source_lang,
                         target_lang,
                         rel_path,
-                        use_intro=use_intro
+                        use_intro=use_intro,
+                        skip_existing=skip_existing
                     )
                     
                     folder_results.append(result)

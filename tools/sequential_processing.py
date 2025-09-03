@@ -244,7 +244,8 @@ class SequentialVideoProcessingTool(ToolBase, LanguageSelectionMixin):
                 output_path=self.output_path,
                 source_lang=self.source_lang.get(),
                 target_langs=list(self.selected_target_langs),
-                use_intro=self.use_intro.get()
+                use_intro=self.use_intro.get(),
+                skip_existing=self.check_output_exists.get()
             )
             
             if success:

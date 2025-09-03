@@ -79,7 +79,7 @@ class VideoMergerAdapter(CoreToolAdapter):
         # Return pairs sorted by numeric index
         return sorted(file_pairs, key=lambda x: int(x[0]))
     
-    def process(self, input_path: Path, output_path: Path, params: Dict[str, Any]) -> bool:
+    def process(self, input_path: Path, output_path: Path, params: Dict[str, Any], skip_existing: bool = True) -> bool:
         """
         Create video from images and audio files using the EXACT same process as video merger tool.
         
@@ -138,6 +138,11 @@ class VideoMergerAdapter(CoreToolAdapter):
                 # Update output path with cleaned name
                 output_path = output_path.parent / f"{output_name}.mp4"
                 self.report_progress(f"Output file will be: {output_path}")
+                
+                # Check if output already exists
+                if skip_existing and output_path.exists():
+                    self.report_progress(f"⏩ Skipping video creation - output already exists: {output_path.name}")
+                    return True
             
             # Prepare intro video if requested
             intro_video_path = None

@@ -42,7 +42,8 @@ class ProcessingPipeline:
     def process_subfolder(self, subfolder_path: Path, output_path: Path,
                          source_lang: str, target_lang: str,
                          relative_path: str = '.',
-                         use_intro: bool = False) -> ProcessingResult:
+                         use_intro: bool = False,
+                         skip_existing: bool = True) -> ProcessingResult:
         """
         Process all files in a subfolder.
         
@@ -53,6 +54,7 @@ class ProcessingPipeline:
             target_lang: Target language code
             relative_path: Relative path from input root
             use_intro: Whether to add intro video
+            skip_existing: Whether to skip files that already exist
             
         Returns:
             ProcessingResult containing all generated files
@@ -77,18 +79,34 @@ class ProcessingPipeline:
                     self.progress_callback("⏹️ Processing stopped by user")
                     return result
                 
-                # Translate PPTX
-                translated_pptx = self._translate_pptx(
-                    pptx_file, subfolder_output, source_lang, target_lang
-                )
-                if translated_pptx:
-                    result.pptx_files.append(translated_pptx)
+                # Check if we should skip this PPTX file
+                expected_pptx = subfolder_output / f"{pptx_file.stem}_{target_lang}.pptx"
+                if skip_existing and expected_pptx.exists():
+                    self.progress_callback(f"⏩ Skipping {pptx_file.name} - translated file already exists")
+                    result.pptx_files.append(expected_pptx)
                     
-                    # Export to PNG
-                    png_files = self._export_pptx_to_png(translated_pptx, subfolder_output)
-                    result.png_files.extend(png_files)
+                    # Check for existing PNG files
+                    existing_pngs = list(subfolder_output.glob(f"{expected_pptx.stem}_slide_*.png"))
+                    if existing_pngs:
+                        self.progress_callback(f"⏩ Found {len(existing_pngs)} existing PNG files")
+                        result.png_files.extend(sorted(existing_pngs))
+                    else:
+                        # Export to PNG if they don't exist
+                        png_files = self._export_pptx_to_png(expected_pptx, subfolder_output)
+                        result.png_files.extend(png_files)
                 else:
-                    result.errors.append(f"Failed to translate {pptx_file.name}")
+                    # Translate PPTX
+                    translated_pptx = self._translate_pptx(
+                        pptx_file, subfolder_output, source_lang, target_lang
+                    )
+                    if translated_pptx:
+                        result.pptx_files.append(translated_pptx)
+                        
+                        # Export to PNG
+                        png_files = self._export_pptx_to_png(translated_pptx, subfolder_output)
+                        result.png_files.extend(png_files)
+                    else:
+                        result.errors.append(f"Failed to translate {pptx_file.name}")
         
         # Step 2: Process text files
         txt_files = list(subfolder_path.glob('*.txt'))
@@ -99,26 +117,46 @@ class ProcessingPipeline:
                     self.progress_callback("⏹️ Processing stopped by user")
                     return result
                 
-                # Translate text
-                translated_txt = self._translate_text(
-                    txt_file, subfolder_output, source_lang, target_lang
-                )
-                if translated_txt:
-                    result.txt_files.append(translated_txt)
+                # Check if we should skip this text file
+                expected_txt = subfolder_output / f"{txt_file.stem}_{target_lang}.txt"
+                expected_audio = subfolder_output / f"{txt_file.stem}_{target_lang}.mp3"
+                
+                if skip_existing and expected_txt.exists():
+                    self.progress_callback(f"⏩ Skipping {txt_file.name} - translated file already exists")
+                    result.txt_files.append(expected_txt)
                     
-                    # Generate audio
-                    audio_file = self._generate_audio(translated_txt, subfolder_output)
-                    if audio_file:
-                        result.audio_files.append(audio_file)
+                    # Check for existing audio file
+                    if expected_audio.exists():
+                        self.progress_callback(f"⏩ Found existing audio file: {expected_audio.name}")
+                        result.audio_files.append(expected_audio)
                     else:
-                        result.errors.append(f"Failed to generate audio for {txt_file.name}")
+                        # Generate audio if it doesn't exist
+                        audio_file = self._generate_audio(expected_txt, subfolder_output)
+                        if audio_file:
+                            result.audio_files.append(audio_file)
+                        else:
+                            result.errors.append(f"Failed to generate audio for {txt_file.name}")
                 else:
-                    result.errors.append(f"Failed to translate {txt_file.name}")
+                    # Translate text
+                    translated_txt = self._translate_text(
+                        txt_file, subfolder_output, source_lang, target_lang
+                    )
+                    if translated_txt:
+                        result.txt_files.append(translated_txt)
+                        
+                        # Generate audio
+                        audio_file = self._generate_audio(translated_txt, subfolder_output)
+                        if audio_file:
+                            result.audio_files.append(audio_file)
+                        else:
+                            result.errors.append(f"Failed to generate audio for {txt_file.name}")
+                    else:
+                        result.errors.append(f"Failed to translate {txt_file.name}")
         
         # Step 3: Generate video if we have materials
         if result.png_files or result.audio_files:
             video_file = self._generate_video(
-                subfolder_output, result.png_files, result.audio_files, subfolder_path, use_intro
+                subfolder_output, result.png_files, result.audio_files, subfolder_path, use_intro, skip_existing
             )
             if video_file:
                 result.video_files.append(video_file)
@@ -188,7 +226,7 @@ class ProcessingPipeline:
     
     def _generate_video(self, output_dir: Path, png_files: List[Path],
                        audio_files: List[Path], input_dir: Path, 
-                       use_intro: bool = False) -> Optional[Path]:
+                       use_intro: bool = False, skip_existing: bool = True) -> Optional[Path]:
         """Generate video from images and audio."""
         if 'video_merger' not in self.adapters:
             self.progress_callback("⚠️ Video merger not available")
@@ -222,7 +260,7 @@ class ProcessingPipeline:
             'use_intro': use_intro  # Pass the use_intro flag
         }
         
-        success = adapter.process(output_dir, video_file, params)
+        success = adapter.process(output_dir, video_file, params, skip_existing)
         return video_file if success else None
     
     def get_summary(self, results: List[ProcessingResult]) -> str:
