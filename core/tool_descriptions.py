@@ -62,6 +62,13 @@ def get_tool_descriptions():
             "use_case": "Automates creation of multilingual video presentations from PowerPoint and text files"
         },
         
+        "sequential_image_processing": {
+            "title": "Sequential Image Processing (SIP)",
+            "description": "Process course PPTX files for multilingual web integration",
+            "details": "Translates PPTX to multiple languages, exports to WEBP images, and updates course markdown files with correct asset paths",
+            "use_case": "Perfect for maintaining multilingual course materials with synchronized images and markdown documentation"
+        },
+        
         "reward_evaluator": {
             "title": "Reward Evaluator",
             "description": "Calculate proofreading rewards for presentations and text documents",

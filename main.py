@@ -26,6 +26,7 @@ from tools import (
     TranscriptCleanerTool,
     VideoMergeTool,
     SequentialVideoProcessingTool,
+    SequentialImageProcessingTool,
     RewardEvaluatorTool
 )
 
@@ -98,6 +99,7 @@ class MainApp(TkinterDnD.Tk):
         self.text_to_speech_tool = self.create_tool_tab("Text to Speech", TextToSpeechTool)  
         self.video_merge_tool = self.create_tool_tab("Video Merge", VideoMergeTool)
         self.sequential_tool = self.create_tool_tab("SVP", SequentialVideoProcessingTool)
+        self.sip_tool = self.create_tool_tab("SIP", SequentialImageProcessingTool)
         self.reward_evaluator_tool = self.create_tool_tab("Reward Evaluator", RewardEvaluatorTool)
 
         # Bottom pane: Progress Text Area
