@@ -28,6 +28,9 @@ class SequentialImageProcessingTool(ToolBase, LanguageSelectionMixin):
         self.source_lang = tk.StringVar(value="en")
         self.target_lang = tk.StringVar(value="fr")
         
+        # Multiple target languages selection
+        self.selected_target_langs = set()
+        
         # Get BEC_REPO path from environment
         self.bec_repo_path = os.getenv('BEC_REPO')
         if not self.bec_repo_path:
@@ -51,6 +54,146 @@ class SequentialImageProcessingTool(ToolBase, LanguageSelectionMixin):
             
             repo_label = ttk.Label(repo_frame, text=f"Path: {self.bec_repo_path}")
             repo_label.pack(padx=5, pady=5)
+
+    def create_language_selection(self):
+        """Creates enhanced language selection UI with multiple target language support."""
+        # Main language frame
+        self.lang_frame = ttk.LabelFrame(self.master, text="Language Selection")
+        self.lang_frame.pack(fill='x', padx=5, pady=5)
+
+        # Source language frame
+        source_frame = ttk.Frame(self.lang_frame)
+        source_frame.pack(side=tk.LEFT, padx=5, pady=5)
+        
+        ttk.Label(source_frame, text="Source Language:").pack(side=tk.LEFT, padx=5)
+        self.source_lang_combo = ttk.Combobox(
+            source_frame, 
+            textvariable=self.source_lang,
+            values=list(self.supported_languages.get("source_languages", {}).keys()),
+            state="readonly",
+            width=10
+        )
+        self.source_lang_combo.pack(side=tk.LEFT, padx=5)
+
+        # Target language selection button
+        target_button = ttk.Button(
+            self.lang_frame,
+            text="Select Target Languages",
+            command=self.open_target_language_selector
+        )
+        target_button.pack(side=tk.LEFT, padx=5, pady=5)
+
+        # Selected languages display
+        self.selected_langs_display = tk.Text(
+            self.lang_frame,
+            height=2,
+            width=30,
+            wrap=tk.WORD,
+            state='disabled'
+        )
+        self.selected_langs_display.pack(side=tk.LEFT, padx=5, pady=5, fill='x', expand=True)
+
+    def open_target_language_selector(self):
+        """Opens a dialog for selecting multiple target languages."""
+        selector = tk.Toplevel(self.master)
+        selector.title("Select Target Languages")
+        selector.geometry("300x400")
+        
+        # Make dialog modal
+        selector.transient(self.master)
+        selector.grab_set()
+        
+        # Create scrollable frame
+        main_frame = ttk.Frame(selector)
+        main_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        canvas = tk.Canvas(main_frame)
+        scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        # Variables to store checkbutton states
+        checkbutton_vars = {}
+        
+        # Create checkbuttons for each target language
+        target_languages = self.supported_languages.get("target_languages", {})
+        for code, name in sorted(target_languages.items()):
+            # Display simplified Portuguese codes
+            display_code = self.get_display_language_code(code)
+            var = tk.BooleanVar(value=code in self.selected_target_langs)
+            checkbutton_vars[code] = var
+            ttk.Checkbutton(
+                scrollable_frame,
+                text=f"{display_code} - {name}",
+                variable=var
+            ).pack(anchor='w', padx=5, pady=2)
+
+        # Pack scrollbar and canvas
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        def save_selection():
+            self.selected_target_langs = {
+                code for code, var in checkbutton_vars.items() if var.get()
+            }
+            self.update_selected_languages_display()
+            selector.destroy()
+
+        # Add buttons
+        button_frame = ttk.Frame(selector)
+        button_frame.pack(fill='x', padx=5, pady=5)
+        
+        ttk.Button(
+            button_frame,
+            text="Select All",
+            command=lambda: [var.set(True) for var in checkbutton_vars.values()]
+        ).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(
+            button_frame,
+            text="Clear All",
+            command=lambda: [var.set(False) for var in checkbutton_vars.values()]
+        ).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(
+            button_frame,
+            text="Save",
+            command=save_selection
+        ).pack(side=tk.RIGHT, padx=5)
+
+    def update_selected_languages_display(self):
+        """Updates the display of selected target languages."""
+        self.selected_langs_display.config(state='normal')
+        self.selected_langs_display.delete(1.0, tk.END)
+        
+        if self.selected_target_langs:
+            # Display simplified codes for Portuguese
+            display_codes = [self.get_display_language_code(code) for code in sorted(self.selected_target_langs)]
+            langs_text = ", ".join(display_codes)
+            self.selected_langs_display.insert(tk.END, f"Selected: {langs_text}")
+        else:
+            self.selected_langs_display.insert(tk.END, "No target languages selected")
+        
+        self.selected_langs_display.config(state='disabled')
+
+    def get_display_language_code(self, code: str) -> str:
+        """Get display-friendly language code (simplify Portuguese codes to 'pt')."""
+        if code in ['pt-br', 'pt-pt']:
+            return 'pt'
+        return code
+
+    def get_deepl_language_code(self, code: str) -> str:
+        """Get DeepL-compatible language code (use pt-BR for Portuguese)."""
+        if code in ['pt', 'pt-br', 'pt-pt']:
+            return 'pt-BR'
+        return code
     
     def get_course_indexes(self) -> List[str]:
         """Extract course indexes from BEC repo courses folder."""
@@ -95,11 +238,22 @@ class SequentialImageProcessingTool(ToolBase, LanguageSelectionMixin):
         
         return None
     
-    def translate_pptx(self, input_file: Path, output_dir: Path, target_lang: str) -> Optional[Path]:
-        """Translate PPTX file to target language."""
+    def translate_pptx(self, input_file: Path, output_dir: Path, display_lang: str, actual_lang_code: str = None) -> Optional[Path]:
+        """Translate PPTX file to target language.
+        
+        Args:
+            input_file: Input PPTX file path
+            output_dir: Output directory path
+            display_lang: Language code for display and file naming (e.g., 'pt')
+            actual_lang_code: Actual language code from config (e.g., 'pt-br'), defaults to display_lang
+        """
         try:
-            # Create output filename
-            output_filename = f"{input_file.stem}_{target_lang}{input_file.suffix}"
+            # Use actual_lang_code if provided, otherwise use display_lang
+            if actual_lang_code is None:
+                actual_lang_code = display_lang
+            
+            # Create output filename using display code
+            output_filename = f"{input_file.stem}_{display_lang}{input_file.suffix}"
             output_file = output_dir / output_filename
             
             # Skip if already exists
@@ -107,7 +261,7 @@ class SequentialImageProcessingTool(ToolBase, LanguageSelectionMixin):
                 self.send_progress_update(f"⏩ Skipping translation - file exists: {output_filename}")
                 return output_file
             
-            self.send_progress_update(f"🌐 Translating to {target_lang}: {input_file.name}")
+            self.send_progress_update(f"🌐 Translating to {display_lang}: {input_file.name}")
             
             # Create translation processor
             progress_reporter = ProgressReporter(callback=lambda msg: (
@@ -125,12 +279,15 @@ class SequentialImageProcessingTool(ToolBase, LanguageSelectionMixin):
                 )
             )
             
+            # Convert to DeepL-compatible language code
+            deepl_target_lang = self.get_deepl_language_code(actual_lang_code)
+            
             # Process the file
             result = processor.process_file(
                 input_file,
                 output_file,
                 source_language=self.source_lang.get(),
-                target_language=target_lang
+                target_language=deepl_target_lang
             )
             
             if result.success:
@@ -313,23 +470,32 @@ class SequentialImageProcessingTool(ToolBase, LanguageSelectionMixin):
             else:
                 self.send_progress_update(f"📚 Course index: {course_index}")
             
-            # Process the single target language from standard language selection
-            target_lang = self.target_lang.get()
+            # Use multiple target languages if selected, otherwise fall back to single target
+            languages_to_process = list(self.selected_target_langs) if self.selected_target_langs else []
             
-            if not target_lang:
-                self.send_progress_update("⚠️ No target language selected")
+            # If no multiple languages selected, use the single target language from standard selection
+            if not languages_to_process:
+                target_lang = self.target_lang.get()
+                if target_lang:
+                    languages_to_process = [target_lang]
+            
+            if not languages_to_process:
+                self.send_progress_update("⚠️ No target languages selected")
                 return
             
-            # Process the target language
-            languages_to_process = [target_lang]
+            self.send_progress_update(f"🌍 Processing {len(languages_to_process)} language(s): {', '.join([self.get_display_language_code(lang) for lang in languages_to_process])}")
+            
+            # Process each target language
             for target_lang in languages_to_process:
                 if self.stop_flag.is_set():
                     raise InterruptedError("Processing stopped by user")
                 
-                self.send_progress_update(f"\n🌍 Processing language: {target_lang}")
+                # Use display code for user feedback and file paths
+                display_code = self.get_display_language_code(target_lang)
+                self.send_progress_update(f"\n🌐 Processing language: {display_code}")
                 
-                # Step 1: Translate PPTX
-                translated_pptx = self.translate_pptx(input_file, output_dir, target_lang)
+                # Step 1: Translate PPTX (using display code for file naming)
+                translated_pptx = self.translate_pptx(input_file, output_dir, display_code, target_lang)
                 if not translated_pptx:
                     continue
                 
@@ -341,25 +507,25 @@ class SequentialImageProcessingTool(ToolBase, LanguageSelectionMixin):
                 # Step 3: Move WEBP files to course assets (if course index found)
                 if course_index and self.bec_repo_path:
                     moved_count, assets_dir = self.move_webp_to_assets(
-                        webp_files, course_index, target_lang
+                        webp_files, course_index, display_code
                     )
                     
                     # Step 4: Update markdown files
                     if moved_count > 0:
                         success = self.update_markdown_files(
-                            course_index, target_lang, moved_count
+                            course_index, display_code, moved_count
                         )
                         if success:
                             self.send_progress_update(
-                                f"✅ Completed processing for {target_lang}"
+                                f"✅ Completed processing for {display_code}"
                             )
                         else:
                             self.send_progress_update(
-                                f"⚠️ Completed but couldn't update markdown for {target_lang}"
+                                f"⚠️ Completed but couldn't update markdown for {display_code}"
                             )
                 else:
                     self.send_progress_update(
-                        f"✅ Exported WEBP files for {target_lang} (no course integration)"
+                        f"✅ Exported WEBP files for {display_code} (no course integration)"
                     )
             
             self.send_progress_update(f"\n✅ Finished processing: {input_file.name}")
@@ -371,6 +537,16 @@ class SequentialImageProcessingTool(ToolBase, LanguageSelectionMixin):
             self.send_progress_update(f"❌ {error_message}")
             logging.exception(error_message)
     
+    def process_paths(self):
+        """Override to ensure at least one target language is selected."""
+        # Check if we have target languages selected
+        if not self.selected_target_langs and not self.target_lang.get():
+            messagebox.showerror("Error", "No target languages selected.")
+            return
+        
+        # Call parent implementation
+        super().process_paths()
+
     def before_processing(self):
         """Setup before processing starts."""
         # Validate configuration
