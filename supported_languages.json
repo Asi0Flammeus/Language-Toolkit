@@ -10,13 +10,18 @@
     "id": "Indonesian",
     "it": "Italian",
     "ja": "Japanese",
+    "ko": "Korean",
+    "nb-NO": "Norwegian",
     "nl": "Dutch",
     "pl": "Polish",
     "pt": "Portuguese",
+    "ro": "Romanian",
     "ru": "Russian",
     "sv": "Swedish",
     "tr": "Turkish",
-    "zh": "Chinese"
+    "zh": "Chinese (Simplified)",
+    "zh-Hans": "Chinese (Simplified)",
+    "zh-Hant": "Chinese (Traditional)"
   },
   "target_languages": {
     "cs": "Czech",
@@ -30,13 +35,18 @@
     "id": "Indonesian",
     "it": "Italian",
     "ja": "Japanese",
+    "ko": "Korean",
+    "nb": "Norwegian (Bokmål)",
     "nl": "Dutch",
     "pl": "Polish",
     "pt-br": "Portuguese (Brazilian)",
     "pt-pt": "Portuguese (European)",
+    "ro": "Romanian",
     "ru": "Russian",
     "sv": "Swedish",
     "tr": "Turkish",
-    "zh": "Chinese"
+    "zh": "Chinese (Simplified)",
+    "zh-Hans": "Chinese (Simplified)",
+    "zh-Hant": "Chinese (Traditional)"
   }
 }
