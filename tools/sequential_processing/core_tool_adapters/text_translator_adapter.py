@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Callable
 
 from . import CoreToolAdapter
-from core.text_translation import TextTranslationCore
+from core.text_translation_config import TextTranslationCore
 
 logger = logging.getLogger(__name__)
 

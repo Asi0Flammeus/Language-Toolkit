@@ -1,7 +1,7 @@
 """
 PPTX Translation Core Module
 
-This module provides PowerPoint presentation translation functionality using the DeepL API.
+This module provides PowerPoint presentation translation functionality using multiple translation providers.
 It can translate text content within PPTX files while preserving formatting, layout, and structure.
 
 Usage Examples:
@@ -10,12 +10,12 @@ Usage Examples:
     CLI: Command-line translation of presentation files
 
 Features:
-    - DeepL API integration for high-quality translation
+    - Multi-provider support (DeepL, Google, OpenAI) via configuration
     - Preserves PowerPoint formatting and layout
     - Handles text in slides, shapes, tables, and text frames
     - Progress callback support for user feedback
     - Comprehensive error handling and validation
-    - Support for all DeepL supported languages
+    - Support for all configured languages
 
 Supported Content:
     - Slide text content
@@ -26,12 +26,12 @@ Supported Content:
 """
 
 import logging
-import deepl
 from pathlib import Path
 from typing import Dict, Any, Optional, Callable
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.dml import MSO_THEME_COLOR, MSO_COLOR_TYPE
+from .text_translation_config import ConfigBasedTranslator
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ class PPTXTranslationCore:
         Initialize PPTX translation core.
         
         Args:
-            api_key: DeepL API key
+            api_key: API key (for backward compatibility, will try to detect provider)
             progress_callback: Optional callback function for progress updates
         """
         self.api_key = api_key
@@ -80,15 +80,54 @@ class PPTXTranslationCore:
         self._init_translator()
     
     def _init_translator(self):
-        """Initialize DeepL translator."""
+        """Initialize configuration-based translator."""
         if not self.api_key:
-            raise ValueError("DeepL API key is required")
+            raise ValueError("API key is required")
         
         try:
-            self.translator = deepl.Translator(self.api_key)
-            self.progress_callback("DeepL translator initialized")
+            # Use ConfigBasedTranslator which will automatically select the right provider
+            # The api_key might be for DeepL, Google, or OpenAI
+            # ConfigBasedTranslator will use environment variables and the provided key
+            import os
+            
+            # Try to determine which provider the API key is for
+            # This is for backward compatibility when a single API key is passed
+            deepl_key = None
+            google_key = None
+            openai_key = None
+            
+            # Simple heuristic: DeepL keys often have ':fx' in them
+            if ':fx' in self.api_key:
+                deepl_key = self.api_key
+            else:
+                # Check if it looks like an OpenAI key (starts with 'sk-')
+                if self.api_key.startswith('sk-'):
+                    openai_key = self.api_key
+                else:
+                    # Default to trying as DeepL first, then Google
+                    deepl_key = self.api_key
+            
+            # Also check environment variables
+            if not deepl_key:
+                deepl_key = os.getenv('DEEPL_API_KEY')
+            if not google_key:
+                google_key = os.getenv('GOOGLE_API_KEY')
+            if not openai_key:
+                openai_key = os.getenv('OPENAI_API_KEY')
+            
+            # If the provided key wasn't identified as DeepL or OpenAI, try it as Google
+            if not deepl_key and not openai_key and self.api_key:
+                google_key = self.api_key
+            
+            self.translator = ConfigBasedTranslator(
+                deepl_api_key=deepl_key,
+                google_api_key=google_key,
+                openai_api_key=openai_key,
+                progress_callback=self.progress_callback
+            )
+            self.progress_callback("Translation system initialized")
         except Exception as e:
-            raise RuntimeError(f"Failed to initialize DeepL translator: {e}")
+            raise RuntimeError(f"Failed to initialize translator: {e}")
     
     def translate_pptx(self, input_path: Path, output_path: Path, 
                       source_lang: str, target_lang: str) -> bool:
@@ -189,12 +228,12 @@ class PPTXTranslationCore:
                              processed_shapes += 1
                              continue # Skip if effectively empty after stripping
 
-                        translated_text_obj = self.translator.translate_text(
+                        # ConfigBasedTranslator returns a string directly
+                        translated_full_text = self.translator.translate_text(
                             original_full_text,
-                            source_lang=source_lang,
-                            target_lang=target_lang
+                            source_lang,
+                            target_lang
                         )
-                        translated_full_text = translated_text_obj.text
 
                         text_frame.clear() # Clear existing content
 
@@ -305,12 +344,14 @@ class PPTXTranslationCore:
             return text
         
         try:
+            # ConfigBasedTranslator handles 'auto' detection internally
             result = self.translator.translate_text(
                 text, 
-                source_lang=source_lang if source_lang != 'auto' else None,
-                target_lang=target_lang
+                source_lang,
+                target_lang
             )
-            return result.text
+            # ConfigBasedTranslator returns a string directly
+            return result
         except Exception as e:
             logger.warning(f"Translation failed for text: {text[:50]}... Error: {e}")
             return text  # Return original text if translation fails

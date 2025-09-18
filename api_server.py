@@ -40,7 +40,7 @@ from core.pptx_converter import PPTXConverterCore
 from core.pptx_translation import PPTXTranslationCore
 from core.s3_utils import S3ClientWrapper
 from core.text_to_speech import TextToSpeechCore
-from core.text_translation import TextTranslationCore
+from core.text_translation_config import TextTranslationCore
 from core.transcription import AudioTranscriptionCore
 from core.video_merger import VideoMergerCore
 

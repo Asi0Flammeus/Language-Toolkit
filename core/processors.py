@@ -681,7 +681,7 @@ class TranslationProcessor(FileProcessor):
             file_ext = get_file_extension(input_path, lowercase=True)
             
             if file_ext == '.txt':
-                from core.text_translation import TextTranslationCore
+                from core.text_translation_config import TextTranslationCore
                 service_class = TextTranslationCore
             elif file_ext == '.pptx':
                 from core.pptx_translation import PPTXTranslationCore
