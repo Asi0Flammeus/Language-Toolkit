@@ -19,6 +19,7 @@ class PPTXtoPDFTool(ToolBase):
         super().__init__(master, config_manager, progress_queue)
         self.supported_extensions = {'.pptx', '.ppt', '.potx', '.pps', '.ppsx'}
         self.output_format = tk.StringVar(value="pdf")  # Default to PDF
+        self.group_elements = tk.BooleanVar(value=False)  # Group elements option for PNG/WEBP export
 
     def create_specific_controls(self, parent_frame):
         """Creates UI elements specific to this tool (output format selection)."""
@@ -34,6 +35,24 @@ class PPTXtoPDFTool(ToolBase):
         ttk.Radiobutton(format_frame, text="WEBP (One per slide)",
                        variable=self.output_format,
                        value="webp").pack(side=tk.LEFT, padx=10)
+        
+        # Export options frame
+        options_frame = ttk.LabelFrame(parent_frame, text="Export Options")
+        options_frame.pack(fill='x', padx=5, pady=5)
+        
+        # Group elements checkbox (only applies to PNG/WEBP)
+        self.group_checkbox = ttk.Checkbutton(
+            options_frame,
+            text="Group elements (crop PNG/WEBP to content bounds)",
+            variable=self.group_elements
+        )
+        self.group_checkbox.pack(padx=5, pady=5, anchor='w')
+        
+        # Add note about when this applies
+        note_label = ttk.Label(options_frame, 
+                              text="Note: Group elements only applies to PNG and WEBP exports",
+                              font=('TkDefaultFont', 9, 'italic'))
+        note_label.pack(padx=5, pady=(0, 5), anchor='w')
 
     def before_processing(self):
         """Load credentials before starting the batch."""
@@ -83,7 +102,8 @@ class PPTXtoPDFTool(ToolBase):
             result = processor.process_file(
                 input_file,
                 output_file,
-                output_format=output_format
+                output_format=output_format,
+                group_elements=self.group_elements.get()  # Pass the group_elements option
             )
             
             if result.success:

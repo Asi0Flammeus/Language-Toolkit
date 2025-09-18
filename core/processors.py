@@ -873,14 +873,17 @@ class ConversionProcessor(FileProcessor):
                 progress_callback=self.progress_reporter.report_progress
             )
             
+            # Get group_elements option if provided (defaults to False)
+            group_elements = options.get('group_elements', False)
+            
             # Perform conversion based on format
             if validated_format == 'pdf':
                 success = converter.convert_pptx_to_pdf(input_path, output_path)
             elif validated_format == 'png':
-                result_files = converter.convert_pptx_to_png(input_path, output_path.parent)
+                result_files = converter.convert_pptx_to_png(input_path, output_path.parent, group_elements)
                 success = len(result_files) > 0
             elif validated_format == 'webp':
-                result_files = converter.convert_pptx_to_webp(input_path, output_path.parent)
+                result_files = converter.convert_pptx_to_webp(input_path, output_path.parent, group_elements=group_elements)
                 success = len(result_files) > 0
             else:
                 raise ValueError(f"Unsupported output format: {validated_format}")

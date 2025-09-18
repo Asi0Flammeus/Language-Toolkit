@@ -40,7 +40,8 @@ class PPTXExporterAdapter(CoreToolAdapter):
         Args:
             input_path: Path to input PPTX file
             output_path: Path to output directory for PNG files (same level as PPTX)
-            params: Additional parameters (not used for PNG export)
+            params: Additional parameters including:
+                - group_elements: If True, crop PNG to element bounds (default: False)
             
         Returns:
             List of generated PNG file paths
@@ -51,12 +52,18 @@ class PPTXExporterAdapter(CoreToolAdapter):
         # output_path here should already be the correct directory
         output_path.mkdir(parents=True, exist_ok=True)
         
+        # Extract group_elements parameter, default to False for backward compatibility
+        group_elements = params.get('group_elements', False) if params else False
+        
         try:
             self.report_progress(f"Exporting PPTX to PNG: {input_path.name}")
+            if group_elements:
+                self.report_progress("Element grouping enabled - will crop to content bounds")
             
             png_files = self.tool.convert_pptx_to_png(
                 input_path=input_path,
-                output_dir=output_path  # PNG files go in same directory as PPTX
+                output_dir=output_path,  # PNG files go in same directory as PPTX
+                group_elements=group_elements
             )
             
             if png_files:

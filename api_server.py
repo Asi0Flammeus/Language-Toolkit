@@ -638,7 +638,7 @@ async def run_pptx_translation_async(task_id: str, input_files: List[Path],
         active_tasks[task_id]["error"] = str(e)
 
 async def run_pptx_conversion_async(task_id: str, input_files: List[Path],
-                                   output_dir: Path, output_format: str):
+                                   output_dir: Path, output_format: str, group_elements: bool = False):
     """Run PPTX to PDF/PNG conversion asynchronously"""
     try:
         # Update task status
@@ -671,7 +671,7 @@ async def run_pptx_conversion_async(task_id: str, input_files: List[Path],
                             if success:
                                 result_files.append(str(output_file))
                         elif output_format.lower() == 'png':
-                            png_files = converter.convert_pptx_to_png(input_file, output_dir)
+                            png_files = converter.convert_pptx_to_png(input_file, output_dir, group_elements)
                             result_files.extend(png_files)
                         elif output_format.lower() == 'webp':
                             webp_files = converter.convert_pptx_to_webp(input_file, output_dir)
@@ -1502,6 +1502,7 @@ async def clean_transcript(
 async def convert_pptx(
     background_tasks: BackgroundTasks,
     output_format: str = Form(...),
+    group_elements: bool = Form(False),  # New optional parameter, defaults to False
     files: List[UploadFile] = File(...),
     token: str = Depends(verify_token)
 ):
@@ -1551,7 +1552,8 @@ async def convert_pptx(
         task_id,
         input_files,
         output_dir,
-        output_format
+        output_format,
+        group_elements
     )
 
     return TaskStatus(task_id=task_id, status="pending", source_lang=None)

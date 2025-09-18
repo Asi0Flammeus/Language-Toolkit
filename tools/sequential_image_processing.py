@@ -31,6 +31,9 @@ class SequentialImageProcessingTool(ToolBase, LanguageSelectionMixin):
         # Multiple target languages selection
         self.selected_target_langs = set()
         
+        # Group elements option for PNG export
+        self.group_elements = tk.BooleanVar(value=False)
+        
         # Get BEC_REPO path from environment
         self.bec_repo_path = os.getenv('BEC_REPO')
         if not self.bec_repo_path:
@@ -54,6 +57,17 @@ class SequentialImageProcessingTool(ToolBase, LanguageSelectionMixin):
             
             repo_label = ttk.Label(repo_frame, text=f"Path: {self.bec_repo_path}")
             repo_label.pack(padx=5, pady=5)
+        
+        # Export options frame
+        export_frame = ttk.LabelFrame(parent_frame, text="Export Options")
+        export_frame.pack(fill='x', padx=5, pady=5)
+        
+        # Group elements checkbox
+        ttk.Checkbutton(
+            export_frame,
+            text="Group elements (crop PNG to content bounds)",
+            variable=self.group_elements
+        ).pack(padx=5, pady=5, anchor='w')
 
     def create_language_selection(self):
         """Creates enhanced language selection UI with multiple target language support."""
@@ -313,11 +327,12 @@ class SequentialImageProcessingTool(ToolBase, LanguageSelectionMixin):
                 progress_callback=self.send_progress_update
             )
             
-            # Convert to WEBP
+            # Convert to WEBP (with group_elements option if selected)
             webp_files = converter.convert_pptx_to_webp(
                 input_path=pptx_file,
                 output_dir=output_dir,
-                quality=85
+                quality=85,
+                group_elements=self.group_elements.get()
             )
             
             if webp_files:
