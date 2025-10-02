@@ -14,6 +14,7 @@ import tempfile
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -100,6 +101,9 @@ rate_limiter = RateLimiter(requests_per_minute=60)
 # Global task storage
 active_tasks: Dict[str, Dict] = {}
 config_manager = ConfigManager(use_project_api_keys=True)
+
+# Thread pool for background tasks
+executor = ThreadPoolExecutor(max_workers=4)
 
 # Authentication setup
 security = OAuth2PasswordBearer(tokenUrl="token")
@@ -2198,8 +2202,8 @@ async def run_transcript_cleaner_s3_async(task_id: str, input_keys: List[str], o
 # Background runner for Course Translation (TXT + PPTX) from S3
 # --------------------------------------
 
-async def run_course_translation_s3_async(task_id: str, course_id: str, source_lang: str, target_langs: List[str],
-                                         output_prefix: Optional[str], temp_dir: Path):
+def run_course_translation_s3_sync(task_id: str, course_id: str, source_lang: str, target_langs: List[str],
+                                   output_prefix: Optional[str], temp_dir: Path):
     """Translate all .pptx and .txt for given course and upload results back preserving structure."""
     try:
         active_tasks[task_id]["status"] = "running"
@@ -2834,8 +2838,11 @@ async def translate_course_s3(
         "source_lang": effective_source_lang,
     }
 
-    background_tasks.add_task(
-        run_course_translation_s3_async,
+    # Run in executor to avoid blocking the event loop
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(
+        executor,
+        run_course_translation_s3_sync,
         task_id,
         request.course_id,
         effective_source_lang,
