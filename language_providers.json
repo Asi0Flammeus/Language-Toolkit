@@ -79,7 +79,7 @@
       "code_translator": "KO"
     },
     {
-      "code": "nb-NO",
+      "code": "nb-no",
       "name": "Norwegian",
       "translator": "deepl",
       "code_translator": "NB"
@@ -127,7 +127,7 @@
       "code_translator": "si"
     },
     {
-      "code": "sr-Latn",
+      "code": "sr-latn",
       "name": "Serbian",
       "translator": "openai",
       "code_translator": "SR-LATN"
@@ -163,7 +163,7 @@
       "code_translator": "vi"
     },
     {
-      "code": "zh-Hans",
+      "code": "zh-hans",
       "name": "Chinese Simplified",
       "translator": "deepl",
       "code_translator": "ZH-HANS"
@@ -190,3 +190,4 @@
     }
   }
 }
+

@@ -13,7 +13,7 @@
     "it": "Italian",
     "ja": "Japanese",
     "ko": "Korean",
-    "nb-NO": "Norwegian",
+    "nb-no": "Norwegian",
     "nl": "Dutch",
     "pl": "Polish",
     "pt": "Portuguese",
@@ -21,15 +21,15 @@
     "ro": "Romanian",
     "ru": "Russian",
     "si": "Sinhala",
-    "sr-Latn": "Serbian",
+    "sr-latn": "Serbian",
     "sv": "Swedish",
     "sw": "Swahili",
     "th": "Thai",
     "tr": "Turkish",
     "vi": "Vietnamese",
     "zh": "Chinese",
-    "zh-Hans": "Chinese (Simplified)",
-    "zh-Hant": "Chinese (Traditional)"
+    "zh-hans": "Chinese (Simplified)",
+    "zh-hant": "Chinese (Traditional)"
   },
   "target_languages": {
     "cs": "Czech",
@@ -48,7 +48,7 @@
     "ja": "Japanese",
     "ko": "Korean",
     "nb": "Norwegian (Bokmål)",
-    "nb-NO": "Norwegian",
+    "nb-no": "Norwegian",
     "nl": "Dutch",
     "pl": "Polish",
     "pt": "Portuguese",
@@ -58,14 +58,14 @@
     "ro": "Romanian",
     "ru": "Russian",
     "si": "Sinhala",
-    "sr-Latn": "Serbian",
+    "sr-latn": "Serbian",
     "sv": "Swedish",
     "sw": "Swahili",
     "th": "Thai",
     "tr": "Turkish",
     "vi": "Vietnamese",
     "zh": "Chinese",
-    "zh-Hans": "Chinese (Simplified)",
-    "zh-Hant": "Chinese (Traditional)"
+    "zh-hans": "Chinese (Simplified)",
+    "zh-hant": "Chinese (Traditional)"
   }
 }
