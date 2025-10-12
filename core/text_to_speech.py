@@ -211,7 +211,7 @@ class TextToSpeechCore:
         default_settings = {
             "stability": 0.5,
             "similarity_boost": 0.5,
-            "style": 0.2,
+            "style": 0.0,
             "use_speaker_boost": True
         }
 
