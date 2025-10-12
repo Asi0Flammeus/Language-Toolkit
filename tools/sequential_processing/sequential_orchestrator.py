@@ -428,13 +428,14 @@ class SequentialOrchestrator:
     
     def get_supported_languages(self) -> Dict[str, Dict[str, str]]:
         """
-        Get supported languages for translation.
-        
+        Get supported languages for translation and TTS.
+
+        Target languages match ElevenLabs Multilingual v2 support (29 languages).
+
         Returns:
             Dictionary with source and target language options
         """
-        # This should ideally come from the core tools
-        # For now, return a standard set
+        # Common source languages (DeepL support)
         languages = {
             'source_languages': {
                 'en': 'English',
@@ -448,24 +449,29 @@ class SequentialOrchestrator:
                 'ja': 'Japanese',
                 'ko': 'Korean'
             },
+            # Target languages: Full ElevenLabs Multilingual v2 support (29 languages)
             'target_languages': {
+                'zh': 'Chinese',
+                'cs': 'Czech',
+                'da': 'Danish',
+                'nl': 'Dutch',
                 'en': 'English',
-                'es': 'Spanish',
+                'fi': 'Finnish',
                 'fr': 'French',
                 'de': 'German',
+                'hi': 'Hindi',
+                'id': 'Indonesian',
                 'it': 'Italian',
-                'pt': 'Portuguese',
-                'ru': 'Russian',
-                'zh': 'Chinese',
                 'ja': 'Japanese',
                 'ko': 'Korean',
-                'ar': 'Arabic',
-                'hi': 'Hindi',
-                'tr': 'Turkish',
                 'pl': 'Polish',
-                'nl': 'Dutch',
-                'sv': 'Swedish'
+                'pt': 'Portuguese',
+                'ru': 'Russian',
+                'es': 'Spanish',
+                'sv': 'Swedish',
+                'tr': 'Turkish',
+                'uk': 'Ukrainian'
             }
         }
-        
+
         return languages
