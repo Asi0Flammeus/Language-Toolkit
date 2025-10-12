@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 
 from ui.base_tool import ToolBase
-from core.processors import ProgressReporter, ProcessorConfig, create_audio_processor
+from core.processors import ProgressReporter, ProcessorConfig, create_audio_processor, BatchContext
 
 
 class TextToSpeechTool(ToolBase):
@@ -12,18 +12,26 @@ class TextToSpeechTool(ToolBase):
     Converts text files (.txt) to MP3 audio using the ElevenLabs API.
     Uses TextToSpeechCore for the actual processing with filename-based voice selection.
     Voice name can be separated by underscore, hyphen, or space.
+
+    Supports request stitching for maintaining voice consistency across multiple
+    segments from the same teacher/voice.
     """
 
     def __init__(self, master, config_manager, progress_queue):
         super().__init__(master, config_manager, progress_queue)
         self.supported_extensions = {'.txt'}
         self.config_manager = config_manager
+        self.batch_context = BatchContext()  # Track request IDs across batch
 
     def before_processing(self):
-        """Pre-processing setup."""
+        """Pre-processing setup and batch context initialization."""
         api_key = self.config_manager.get_api_keys().get("elevenlabs")
         if not api_key:
             raise ValueError("ElevenLabs API key not configured. Please add your API key in the Configuration menu.")
+
+        # Reset batch context for new processing batch
+        self.batch_context.reset()
+        self.send_progress_update("Initialized request stitching for voice consistency")
 
     def process_file(self, input_file: Path, output_dir: Path):
         """Processes a single text file for TTS conversion using consolidated audio processor."""
@@ -51,11 +59,12 @@ class TextToSpeechTool(ToolBase):
                 )
             )
             
-            # Process the file using consolidated processor
+            # Process the file using consolidated processor with batch context
             result = processor.process_file(
                 input_file,
                 output_file,
-                operation='synthesize'
+                operation='synthesize',
+                batch_context=self.batch_context
             )
             
             if result.success:
