@@ -72,12 +72,12 @@ class TTSAdapter(CoreToolAdapter):
             
             # Use text_to_speech_file method which automatically detects voice from filename
             # This is EXACTLY the same method used by the main text-to-speech tool
-            success = self.tool.text_to_speech_file(
+            success, request_id = self.tool.text_to_speech_file(
                 input_path=input_path,
                 output_path=output_file,
                 voice_settings=voice_settings
             )
-            
+
             if success:
                 self.report_progress(f"✓ Audio saved to: {output_file}")
                 return output_file
