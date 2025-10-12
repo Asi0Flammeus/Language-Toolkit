@@ -172,8 +172,8 @@ class TextToSpeechCore:
             with open(output_path, 'wb') as f:
                 f.write(audio_data)
 
-            # Apply normalization for texts >800 chars (conservative)
-            self.normalize_audio(output_path, text_length, threshold=800)
+            # Apply LUFS-based loudness normalization to all audio files
+            self.normalize_audio(output_path, target_lufs=-14.0, tp_db=-1.0)
 
             self.progress_callback("Audio generation completed successfully")
             return True, request_id
@@ -211,7 +211,7 @@ class TextToSpeechCore:
         default_settings = {
             "stability": 0.5,
             "similarity_boost": 0.5,
-            "style": 0.0,
+            "style": 0.2,
             "use_speaker_boost": True
         }
 
@@ -252,40 +252,70 @@ class TextToSpeechCore:
                 self.progress_callback(f"Network error: {e}. Retrying in {self.RETRY_DELAY} seconds...")
                 time.sleep(self.RETRY_DELAY)
 
-    def normalize_audio(self, audio_path: Path, text_length: int, threshold: int = 800) -> bool:
+    def normalize_audio(self, audio_path: Path, target_lufs: float = -14.0, tp_db: float = -1.0) -> bool:
         """
-        Apply volume normalization for texts exceeding threshold (conservative approach).
+        Apply LUFS-based loudness normalization to audio file.
+
+        Uses pyloudnorm for proper loudness measurement and normalization according
+        to EBU R128 / ITU-R BS.1770 standards. This ensures consistent perceived
+        loudness across all generated audio files.
 
         Args:
             audio_path: Path to audio file to normalize
-            text_length: Length of original text in characters
-            threshold: Character threshold for applying normalization (default: 800)
+            target_lufs: Target integrated loudness in LUFS (default: -14.0)
+            tp_db: True-peak ceiling in dBFS (default: -1.0)
 
         Returns:
-            True if normalization was applied, False otherwise
+            True if normalization was applied successfully, False otherwise
         """
-        if text_length <= threshold:
-            logger.debug(f"Skipping normalization (text length: {text_length} <= {threshold})")
-            return False
-
         try:
-            from pydub import AudioSegment
-            from pydub.effects import normalize
+            import numpy as np
+            import soundfile as sf
+            import librosa
+            import pyloudnorm as pyln
 
-            self.progress_callback(f"Applying volume normalization (text: {text_length} chars, threshold: {threshold})...")
-            logger.info(f"Normalizing audio for {audio_path.name} (text length: {text_length})")
+            self.progress_callback(f"Applying LUFS-based loudness normalization (target: {target_lufs} LUFS)...")
+            logger.info(f"Normalizing audio for {audio_path.name} (target: {target_lufs} LUFS, peak: {tp_db} dBFS)")
 
-            # Load audio
-            audio = AudioSegment.from_mp3(audio_path)
+            # Load audio (preserve sample rate, keep stereo if present)
+            y, sr = librosa.load(str(audio_path), sr=None, mono=False)
+            if y.ndim == 1:
+                y = y[None, :]  # (1, N) for mono
 
-            # Apply normalization with 3dB headroom
-            normalized = normalize(audio, headroom=3.0)
+            # Measure loudness on mono mixdown (apply same gain to all channels)
+            meter = pyln.Meter(sr, block_size=0.400, filter_class="K-weighting")
+            loudness = meter.integrated_loudness(y.mean(axis=0))
 
-            # Export back to same file
-            normalized.export(audio_path, format="mp3", bitrate="128k")
+            logger.debug(f"Measured loudness: {loudness:.2f} LUFS")
 
-            self.progress_callback("Volume normalization applied successfully")
-            logger.info(f"Successfully normalized {audio_path.name}")
+            # Calculate gain adjustment
+            gain_db = target_lufs - loudness
+            y_gain = y * (10 ** (gain_db / 20.0))
+
+            logger.debug(f"Applied gain: {gain_db:.2f} dB")
+
+            # True-peak safety ceiling
+            tp_lin = 10 ** (tp_db / 20.0)  # -1 dBFS -> ~0.89
+            peak = np.max(np.abs(y_gain))
+            if peak > tp_lin:
+                logger.debug(f"Peak {peak:.4f} exceeds ceiling {tp_lin:.4f}, clipping")
+                y_gain = np.clip(y_gain, -tp_lin, tp_lin)
+
+            # Write temp WAV (best quality before MP3 encoding)
+            wav_out = str(audio_path).replace(".mp3", "_tmp.wav")
+            sf.write(wav_out, y_gain.T, sr, subtype="PCM_16")
+
+            # Encode to MP3 via ffmpeg (requires ffmpeg in PATH)
+            import subprocess
+            import shlex
+            import os
+
+            cmd = f'ffmpeg -y -i {shlex.quote(wav_out)} -codec:a libmp3lame -b:a 320k {shlex.quote(str(audio_path))}'
+            result = subprocess.run(cmd, shell=True, check=True, capture_output=True, text=True)
+            os.remove(wav_out)
+
+            self.progress_callback("Loudness normalization applied successfully")
+            logger.info(f"Successfully normalized {audio_path.name} from {loudness:.2f} LUFS to {target_lufs:.2f} LUFS")
             return True
 
         except Exception as e:
