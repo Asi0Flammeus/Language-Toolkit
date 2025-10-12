@@ -202,7 +202,208 @@ class SequentialOrchestrator:
             logger.exception(f"Error during orchestrated processing: {str(e)}")
             self.progress_callback(f"❌ Critical error: {str(e)}")
             return False
-    
+
+    def process_translation_phase(self, input_path: Path, output_path: Path,
+                                   source_lang: str, target_langs: List[str],
+                                   skip_existing: bool = True) -> bool:
+        """
+        Process translation phase only (PPTX and TXT translation).
+
+        Args:
+            input_path: Path to input folder
+            output_path: Path to output folder
+            source_lang: Source language code
+            target_langs: List of target language codes
+            skip_existing: Whether to skip files that already exist
+
+        Returns:
+            True if successful, False if interrupted or failed
+        """
+        try:
+            self.stop_flag.clear()
+
+            # Scan input folder structure
+            self.progress_callback("📂 Scanning input folder structure...")
+            folder_map = self.folder_manager.scan_input(input_path)
+
+            if not folder_map:
+                self.progress_callback("⚠️ No files found in input folder")
+                return False
+
+            stats = self.folder_manager.get_folder_stats()
+            self.progress_callback(
+                f"📊 Found: {stats['total_folders']} folders, "
+                f"{stats['pptx_files']} PPTX files, "
+                f"{stats['txt_files']} text files"
+            )
+
+            self.progress_aggregator.initialize(target_langs, len(folder_map))
+
+            all_results = []
+
+            for target_lang in target_langs:
+                if self.stop_flag.is_set():
+                    self.progress_callback("⏹️ Processing stopped by user")
+                    break
+
+                self.progress_aggregator.start_language(target_lang)
+
+                lang_output_path = self.folder_manager.create_output_structure(
+                    input_path, output_path, target_lang
+                )
+
+                folder_results = []
+
+                for rel_path, folder_info in folder_map.items():
+                    if self.stop_flag.is_set():
+                        break
+
+                    self.progress_aggregator.start_folder(rel_path)
+
+                    # Process translation phase only
+                    result = self.pipeline.process_translation_only(
+                        folder_info['full_path'],
+                        lang_output_path,
+                        source_lang,
+                        target_lang,
+                        rel_path,
+                        skip_existing=skip_existing
+                    )
+
+                    folder_results.append(result)
+
+                    success = len(result.errors) == 0
+                    error_msg = result.errors[0] if result.errors else None
+                    self.progress_aggregator.complete_folder(success, error_msg)
+
+                all_results.extend(folder_results)
+
+            summary = self.pipeline.get_summary(all_results)
+            self.progress_callback(summary)
+
+            error_summary = self.error_handler.get_error_summary()
+            self.progress_callback(error_summary)
+
+            report = self.progress_aggregator.get_final_report()
+            self.progress_callback(report)
+
+            if self.error_handler.errors:
+                error_log_path = output_path / "translation_error_log.txt"
+                self.error_handler.export_error_log(str(error_log_path))
+
+            return not self.stop_flag.is_set()
+
+        except Exception as e:
+            self.error_handler.handle_error(
+                e,
+                "translation phase",
+                ErrorCategory.PROCESSING_ERROR
+            )
+            logger.exception(f"Error during translation phase: {str(e)}")
+            self.progress_callback(f"❌ Critical error: {str(e)}")
+            return False
+
+    def process_export_phase(self, input_path: Path, output_path: Path,
+                            source_lang: str, target_langs: List[str],
+                            use_intro: bool = False, skip_existing: bool = True) -> bool:
+        """
+        Process export phase only (PNG export, TTS, video merge).
+
+        Args:
+            input_path: Path to input folder (should contain translated files)
+            output_path: Path to output folder
+            source_lang: Source language code (for reference)
+            target_langs: List of target language codes
+            use_intro: Whether to add intro video to generated videos
+            skip_existing: Whether to skip files that already exist
+
+        Returns:
+            True if successful, False if interrupted or failed
+        """
+        try:
+            self.stop_flag.clear()
+
+            # Scan input folder structure
+            self.progress_callback("📂 Scanning input folder structure...")
+            folder_map = self.folder_manager.scan_input(input_path)
+
+            if not folder_map:
+                self.progress_callback("⚠️ No files found in input folder")
+                return False
+
+            stats = self.folder_manager.get_folder_stats()
+            self.progress_callback(
+                f"📊 Found: {stats['total_folders']} folders, "
+                f"{stats['pptx_files']} PPTX files, "
+                f"{stats['txt_files']} text files"
+            )
+
+            self.progress_aggregator.initialize(target_langs, len(folder_map))
+
+            all_results = []
+
+            for target_lang in target_langs:
+                if self.stop_flag.is_set():
+                    self.progress_callback("⏹️ Processing stopped by user")
+                    break
+
+                self.progress_aggregator.start_language(target_lang)
+
+                lang_output_path = self.folder_manager.create_output_structure(
+                    input_path, output_path, target_lang
+                )
+
+                folder_results = []
+
+                for rel_path, folder_info in folder_map.items():
+                    if self.stop_flag.is_set():
+                        break
+
+                    self.progress_aggregator.start_folder(rel_path)
+
+                    # Process export phase only
+                    result = self.pipeline.process_export_only(
+                        folder_info['full_path'],
+                        lang_output_path,
+                        target_lang,
+                        rel_path,
+                        use_intro=use_intro,
+                        skip_existing=skip_existing
+                    )
+
+                    folder_results.append(result)
+
+                    success = len(result.errors) == 0
+                    error_msg = result.errors[0] if result.errors else None
+                    self.progress_aggregator.complete_folder(success, error_msg)
+
+                all_results.extend(folder_results)
+
+            summary = self.pipeline.get_summary(all_results)
+            self.progress_callback(summary)
+
+            error_summary = self.error_handler.get_error_summary()
+            self.progress_callback(error_summary)
+
+            report = self.progress_aggregator.get_final_report()
+            self.progress_callback(report)
+
+            if self.error_handler.errors:
+                error_log_path = output_path / "export_error_log.txt"
+                self.error_handler.export_error_log(str(error_log_path))
+
+            return not self.stop_flag.is_set()
+
+        except Exception as e:
+            self.error_handler.handle_error(
+                e,
+                "export phase",
+                ErrorCategory.PROCESSING_ERROR
+            )
+            logger.exception(f"Error during export phase: {str(e)}")
+            self.progress_callback(f"❌ Critical error: {str(e)}")
+            return False
+
     def stop_processing(self):
         """Stop the current processing operation."""
         self.stop_flag.set()

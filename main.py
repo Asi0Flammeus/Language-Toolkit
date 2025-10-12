@@ -27,7 +27,9 @@ from tools import (
     VideoMergeTool,
     SequentialVideoProcessingTool,
     SequentialImageProcessingTool,
-    RewardEvaluatorTool
+    RewardEvaluatorTool,
+    SVPTranslationTool,
+    SVPExportTool
 )
 
 # Constants
@@ -99,6 +101,8 @@ class MainApp(TkinterDnD.Tk):
         self.text_to_speech_tool = self.create_tool_tab("Text to Speech", TextToSpeechTool)  
         self.video_merge_tool = self.create_tool_tab("Video Merge", VideoMergeTool)
         self.sequential_tool = self.create_tool_tab("SVP", SequentialVideoProcessingTool)
+        self.svp_translation_tool = self.create_tool_tab("SVP-1", SVPTranslationTool)
+        self.svp_export_tool = self.create_tool_tab("SVP-2", SVPExportTool)
         self.sip_tool = self.create_tool_tab("SIP", SequentialImageProcessingTool)
         self.reward_evaluator_tool = self.create_tool_tab("Reward Evaluator", RewardEvaluatorTool)
 
@@ -138,14 +142,16 @@ class MainApp(TkinterDnD.Tk):
         # Map tool classes to description keys
         tool_description_map = {
             PPTXTranslationTool: "pptx_translation",
-            AudioTranscriptionTool: "audio_transcription", 
+            AudioTranscriptionTool: "audio_transcription",
             TextTranslationTool: "text_translation",
             PPTXtoPDFTool: "pptx_to_pdf_png",
             TextToSpeechTool: "text_to_speech",
             VideoMergeTool: "video_merge",
             SequentialVideoProcessingTool: "sequential_video_processing",
             RewardEvaluatorTool: "reward_evaluator",
-            TranscriptCleanerTool: "transcript_cleaner"
+            TranscriptCleanerTool: "transcript_cleaner",
+            SVPTranslationTool: "svp_translation",
+            SVPExportTool: "svp_export"
         }
         
         # Get tool description key

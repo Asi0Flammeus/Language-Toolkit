@@ -164,7 +164,171 @@ class ProcessingPipeline:
                 result.errors.append(f"Failed to generate video for {relative_path}")
         
         return result
-    
+
+    def process_translation_only(self, subfolder_path: Path, output_path: Path,
+                                 source_lang: str, target_lang: str,
+                                 relative_path: str = '.',
+                                 skip_existing: bool = True) -> ProcessingResult:
+        """
+        Process translation phase only (PPTX and TXT translation).
+
+        Args:
+            subfolder_path: Path to the subfolder to process
+            output_path: Root output path for this language
+            source_lang: Source language code
+            target_lang: Target language code
+            relative_path: Relative path from input root
+            skip_existing: Whether to skip files that already exist
+
+        Returns:
+            ProcessingResult containing all translated files
+        """
+        result = ProcessingResult()
+
+        # Create output subdirectory preserving structure
+        if relative_path != '.':
+            subfolder_output = output_path / relative_path
+        else:
+            subfolder_output = output_path
+        subfolder_output.mkdir(parents=True, exist_ok=True)
+
+        self.progress_callback(f"\n📁 Processing folder: {relative_path}")
+
+        # Step 1: Process PPTX files
+        pptx_files = list(subfolder_path.glob('*.pptx'))
+        if pptx_files:
+            self.progress_callback(f"Found {len(pptx_files)} PPTX files")
+            for pptx_file in pptx_files:
+                if self.stop_flag and self.stop_flag.is_set():
+                    self.progress_callback("⏹️ Processing stopped by user")
+                    return result
+
+                expected_pptx = subfolder_output / f"{pptx_file.stem}_{target_lang}.pptx"
+                if skip_existing and expected_pptx.exists():
+                    self.progress_callback(f"⏩ Skipping {pptx_file.name} - translated file already exists")
+                    result.pptx_files.append(expected_pptx)
+                else:
+                    # Translate PPTX
+                    translated_pptx = self._translate_pptx(
+                        pptx_file, subfolder_output, source_lang, target_lang
+                    )
+                    if translated_pptx:
+                        result.pptx_files.append(translated_pptx)
+                    else:
+                        result.errors.append(f"Failed to translate {pptx_file.name}")
+
+        # Step 2: Process text files
+        txt_files = list(subfolder_path.glob('*.txt'))
+        if txt_files:
+            self.progress_callback(f"Found {len(txt_files)} text files")
+            for txt_file in txt_files:
+                if self.stop_flag and self.stop_flag.is_set():
+                    self.progress_callback("⏹️ Processing stopped by user")
+                    return result
+
+                expected_txt = subfolder_output / f"{txt_file.stem}_{target_lang}.txt"
+
+                if skip_existing and expected_txt.exists():
+                    self.progress_callback(f"⏩ Skipping {txt_file.name} - translated file already exists")
+                    result.txt_files.append(expected_txt)
+                else:
+                    # Translate text
+                    translated_txt = self._translate_text(
+                        txt_file, subfolder_output, source_lang, target_lang
+                    )
+                    if translated_txt:
+                        result.txt_files.append(translated_txt)
+                    else:
+                        result.errors.append(f"Failed to translate {txt_file.name}")
+
+        return result
+
+    def process_export_only(self, subfolder_path: Path, output_path: Path,
+                            target_lang: str, relative_path: str = '.',
+                            use_intro: bool = False,
+                            skip_existing: bool = True) -> ProcessingResult:
+        """
+        Process export phase only (PNG export, TTS, video merge).
+
+        Args:
+            subfolder_path: Path to the subfolder to process (should contain translated files)
+            output_path: Root output path for this language
+            target_lang: Target language code
+            relative_path: Relative path from input root
+            use_intro: Whether to add intro video
+            skip_existing: Whether to skip files that already exist
+
+        Returns:
+            ProcessingResult containing all generated files
+        """
+        result = ProcessingResult()
+
+        # Create output subdirectory preserving structure
+        if relative_path != '.':
+            subfolder_output = output_path / relative_path
+        else:
+            subfolder_output = output_path
+        subfolder_output.mkdir(parents=True, exist_ok=True)
+
+        self.progress_callback(f"\n📁 Processing folder: {relative_path}")
+
+        # Step 1: Find translated PPTX files and export to PNG
+        translated_pptx_files = list(subfolder_output.glob(f'*_{target_lang}.pptx'))
+        if translated_pptx_files:
+            self.progress_callback(f"Found {len(translated_pptx_files)} translated PPTX files")
+            for pptx_file in translated_pptx_files:
+                if self.stop_flag and self.stop_flag.is_set():
+                    self.progress_callback("⏹️ Processing stopped by user")
+                    return result
+
+                result.pptx_files.append(pptx_file)
+
+                # Check for existing PNG files
+                existing_pngs = list(subfolder_output.glob(f"{pptx_file.stem}_slide_*.png"))
+                if existing_pngs and skip_existing:
+                    self.progress_callback(f"⏩ Found {len(existing_pngs)} existing PNG files for {pptx_file.name}")
+                    result.png_files.extend(sorted(existing_pngs))
+                else:
+                    # Export to PNG
+                    png_files = self._export_pptx_to_png(pptx_file, subfolder_output)
+                    result.png_files.extend(png_files)
+
+        # Step 2: Find translated text files and generate audio
+        translated_txt_files = list(subfolder_output.glob(f'*_{target_lang}.txt'))
+        if translated_txt_files:
+            self.progress_callback(f"Found {len(translated_txt_files)} translated text files")
+            for txt_file in translated_txt_files:
+                if self.stop_flag and self.stop_flag.is_set():
+                    self.progress_callback("⏹️ Processing stopped by user")
+                    return result
+
+                result.txt_files.append(txt_file)
+
+                expected_audio = subfolder_output / f"{txt_file.stem}.mp3"
+
+                if expected_audio.exists() and skip_existing:
+                    self.progress_callback(f"⏩ Found existing audio file: {expected_audio.name}")
+                    result.audio_files.append(expected_audio)
+                else:
+                    # Generate audio
+                    audio_file = self._generate_audio(txt_file, subfolder_output)
+                    if audio_file:
+                        result.audio_files.append(audio_file)
+                    else:
+                        result.errors.append(f"Failed to generate audio for {txt_file.name}")
+
+        # Step 3: Generate video if we have materials
+        if result.png_files or result.audio_files:
+            video_file = self._generate_video(
+                subfolder_output, result.png_files, result.audio_files, subfolder_path, use_intro, skip_existing
+            )
+            if video_file:
+                result.video_files.append(video_file)
+            else:
+                result.errors.append(f"Failed to generate video for {relative_path}")
+
+        return result
+
     def _translate_pptx(self, input_file: Path, output_dir: Path,
                        source_lang: str, target_lang: str) -> Optional[Path]:
         """Translate a PPTX file."""

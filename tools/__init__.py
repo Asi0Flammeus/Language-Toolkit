@@ -19,10 +19,12 @@ spec.loader.exec_module(sequential_processing_module)
 SequentialVideoProcessingTool = sequential_processing_module.SequentialVideoProcessingTool
 from .reward_evaluator import RewardEvaluatorTool
 from .sequential_image_processing import SequentialImageProcessingTool
+from .svp_translation import SVPTranslationTool
+from .svp_export import SVPExportTool
 
 __all__ = [
     'TextToSpeechTool',
-    'AudioTranscriptionTool', 
+    'AudioTranscriptionTool',
     'PPTXTranslationTool',
     'TextTranslationTool',
     'PPTXtoPDFTool',
@@ -30,5 +32,7 @@ __all__ = [
     'VideoMergeTool',
     'SequentialVideoProcessingTool',
     'SequentialImageProcessingTool',
-    'RewardEvaluatorTool'
+    'RewardEvaluatorTool',
+    'SVPTranslationTool',
+    'SVPExportTool'
 ]

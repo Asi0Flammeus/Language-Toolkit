@@ -81,6 +81,20 @@ def get_tool_descriptions():
             "description": "Clean and tighten raw audio transcripts for professional presentation",
             "details": "Uses Claude AI (with OpenAI GPT-4 fallback) to remove filler words, fix grammar, and produce polished transcripts while maintaining speaker voice",
             "use_case": "Ideal for converting raw recordings into presentation-ready transcripts"
+        },
+
+        "svp_translation": {
+            "title": "SVP-1: Batch Translation",
+            "description": "Batch translation phase for PPTX presentations and TXT files",
+            "details": "Translates PowerPoint and text files to multiple languages in parallel while preserving folder structure",
+            "use_case": "First step in video production workflow - prepares all translated materials"
+        },
+
+        "svp_export": {
+            "title": "SVP-2: Export & Production",
+            "description": "Export phase for PNG conversion, TTS audio, and video merging",
+            "details": "Converts translated PPTX to PNG images, generates TTS audio from translated text, and merges into videos",
+            "use_case": "Second step in video production workflow - creates final video outputs"
         }
     }
 
@@ -135,6 +149,16 @@ def get_tool_requirements():
         "transcript_cleaner": {
             "api_required": "Anthropic or OpenAI",
             "api_description": "Anthropic API key for Claude AI (primary) or OpenAI API key for GPT-4 (fallback)"
+        },
+
+        "svp_translation": {
+            "api_required": "DeepL",
+            "api_description": "DeepL API key for translating PPTX and TXT files"
+        },
+
+        "svp_export": {
+            "api_required": "ConvertAPI and ElevenLabs",
+            "api_description": "ConvertAPI for PNG export and ElevenLabs for TTS audio generation"
         }
     }
 
@@ -198,6 +222,18 @@ def get_supported_formats():
             "input": [".txt"],
             "output": [".txt"],
             "notes": "Cleans raw transcripts, removes filler words, fixes grammar"
+        },
+
+        "svp_translation": {
+            "input": [".pptx", ".txt"],
+            "output": [".pptx", ".txt"],
+            "notes": "Batch translates presentations and text to multiple languages"
+        },
+
+        "svp_export": {
+            "input": [".pptx", ".txt"],
+            "output": [".png", ".mp3", ".mp4"],
+            "notes": "Exports PPTX to PNG, generates TTS audio, creates videos"
         }
     }
 
@@ -261,6 +297,18 @@ def get_quick_tips():
             "Ensure your Anthropic (Claude) API key is configured",
             "Cleaned files are saved with '-ai-cleaned.txt' suffix",
             "Preserves technical terms and speaker's voice while removing filler words"
+        ],
+
+        "svp_translation": [
+            "Configure DeepL API key before starting",
+            "Select multiple target languages for batch processing",
+            "Translated files are saved with language suffix (e.g., _fr.pptx)"
+        ],
+
+        "svp_export": [
+            "Requires ConvertAPI and ElevenLabs API keys",
+            "Works on previously translated files from SVP-1",
+            "Enable intro video option for professional presentations"
         ]
     }
 
