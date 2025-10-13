@@ -239,14 +239,17 @@ class TextToSpeechCore:
 
     def normalize_audio(self, audio_path: Path, target_lufs: float = -14.0, tp_db: float = -1.0) -> bool:
         """
-        Apply audio leveling and normalization to maintain consistent volume.
+        Apply two-pass loudness normalization for highest audio quality.
 
-        Uses FFmpeg filter chain:
-        1. Dynamic compression - Reduces volume variations within audio (makes quiet parts louder)
-        2. Loudnorm - EBU R128 / ITU-R BS.1770 loudness standards
+        Uses FFmpeg two-pass loudnorm (EBU R128 / ITU-R BS.1770):
+        Pass 1: Analyze entire file to measure actual loudness characteristics
+        Pass 2: Apply precise normalization based on measurements with compression
 
-        This ensures consistent voice levels throughout the file (prevents quieter voice over time)
-        and normalizes loudness across all files.
+        This ensures:
+        - Most accurate loudness normalization possible
+        - Consistent voice levels throughout the file (compression prevents quieter voice over time)
+        - Consistent perceived loudness across all files (two-pass loudnorm)
+        - Broadcast-quality audio processing
 
         Args:
             audio_path: Path to audio file to normalize
@@ -257,32 +260,62 @@ class TextToSpeechCore:
             True if normalization was applied successfully, False otherwise
         """
         import subprocess
+        import json
+        import re
 
         # Temp output path
         temp_output = audio_path.with_suffix('.normalized.mp3')
 
         try:
-            self.progress_callback(f"Applying compression and normalization (target: {target_lufs} LUFS)...")
-            logger.info(f"Processing audio for {audio_path.name}: compression → normalization (target: {target_lufs} LUFS, peak: {tp_db} dBFS)")
+            self.progress_callback(f"Pass 1/2: Analyzing audio loudness...")
+            logger.info(f"Two-pass normalization for {audio_path.name} (target: {target_lufs} LUFS, peak: {tp_db} dBFS)")
 
-            # FFmpeg filter chain:
-            # 1. acompressor: Reduces dynamic range to keep voice consistent
-            #    - threshold=-20dB: Start compressing above -20dB
-            #    - ratio=4: 4:1 compression ratio (moderate)
-            #    - attack=5ms, release=50ms: Fast response for speech
-            #    - makeup=2dB: Slight gain boost after compression
-            # 2. loudnorm: EBU R128 loudness normalization
-            #    - I=target_lufs: Integrated loudness target
-            #    - TP=tp_db: True-peak ceiling
-            #    - LRA=11: Loudness range target (standard for speech)
-            filter_complex = (
-                f"acompressor=threshold=-20dB:ratio=4:attack=5:release=50:makeup=2dB,"
-                f"loudnorm=I={target_lufs}:TP={tp_db}:LRA=11"
+            # PASS 1: Measure loudness characteristics
+            cmd_measure = [
+                'ffmpeg',
+                '-i', str(audio_path),
+                '-af', f'loudnorm=I={target_lufs}:TP={tp_db}:LRA=11:print_format=json',
+                '-f', 'null',
+                '-'
+            ]
+
+            result_measure = subprocess.run(
+                cmd_measure,
+                capture_output=True,
+                text=True
             )
 
-            cmd = [
+            # Parse JSON output from stderr
+            # FFmpeg outputs JSON at the end of stderr
+            json_match = re.search(r'\{[^}]*"input_i"[^}]*\}', result_measure.stderr, re.DOTALL)
+            if not json_match:
+                logger.warning("Could not parse loudness measurements, falling back to single-pass")
+                return self._normalize_audio_single_pass(audio_path, target_lufs, tp_db)
+
+            measurements = json.loads(json_match.group(0))
+
+            measured_i = measurements.get('input_i')
+            measured_tp = measurements.get('input_tp')
+            measured_lra = measurements.get('input_lra')
+            measured_thresh = measurements.get('input_thresh')
+            target_offset = measurements.get('target_offset')
+
+            logger.info(f"Measured: I={measured_i} LUFS, TP={measured_tp} dBFS, LRA={measured_lra}, Offset={target_offset}")
+
+            # PASS 2: Apply normalization with measurements + compression
+            self.progress_callback(f"Pass 2/2: Applying precise normalization and compression...")
+
+            # Filter chain: compression first, then two-pass loudnorm
+            filter_complex = (
+                f"acompressor=threshold=-20dB:ratio=4:attack=5:release=50:makeup=2dB,"
+                f"loudnorm=I={target_lufs}:TP={tp_db}:LRA=11:"
+                f"measured_I={measured_i}:measured_TP={measured_tp}:measured_LRA={measured_lra}:"
+                f"measured_thresh={measured_thresh}:offset={target_offset}:linear=true"
+            )
+
+            cmd_normalize = [
                 'ffmpeg',
-                '-y',  # Overwrite output
+                '-y',
                 '-i', str(audio_path),
                 '-af', filter_complex,
                 '-codec:a', 'libmp3lame',
@@ -290,10 +323,10 @@ class TextToSpeechCore:
                 str(temp_output)
             ]
 
-            logger.debug(f"Running FFmpeg command: {' '.join(cmd)}")
+            logger.debug(f"Running FFmpeg normalization: {' '.join(cmd_normalize)}")
 
-            result = subprocess.run(
-                cmd,
+            result_normalize = subprocess.run(
+                cmd_normalize,
                 check=True,
                 capture_output=True,
                 text=True
@@ -302,20 +335,66 @@ class TextToSpeechCore:
             # Replace original with normalized version
             temp_output.replace(audio_path)
 
-            self.progress_callback("Audio processing complete: compression and normalization applied")
-            logger.info(f"Successfully processed {audio_path.name}: compression → loudnorm")
+            self.progress_callback("Audio processing complete: two-pass normalization with compression applied")
+            logger.info(f"Successfully processed {audio_path.name}: two-pass loudnorm (measured {measured_i} → {target_lufs} LUFS)")
             return True
 
         except subprocess.CalledProcessError as e:
-            logger.warning(f"Normalization failed for {audio_path.name}: {e.stderr}")
+            logger.warning(f"Two-pass normalization failed for {audio_path.name}: {e.stderr}")
             self.progress_callback(f"Warning: Normalization failed - {e.stderr}")
             # Clean up temp file if it exists
             if temp_output.exists():
                 temp_output.unlink()
             return False
         except Exception as e:
-            logger.warning(f"Normalization failed for {audio_path.name}: {e}")
+            logger.warning(f"Two-pass normalization failed for {audio_path.name}: {e}")
             self.progress_callback(f"Warning: Normalization failed - {e}")
+            return False
+
+    def _normalize_audio_single_pass(self, audio_path: Path, target_lufs: float = -14.0, tp_db: float = -1.0) -> bool:
+        """
+        Fallback: Single-pass normalization if two-pass fails.
+
+        Args:
+            audio_path: Path to audio file to normalize
+            target_lufs: Target integrated loudness in LUFS
+            tp_db: True-peak ceiling in dBFS
+
+        Returns:
+            True if successful, False otherwise
+        """
+        import subprocess
+
+        temp_output = audio_path.with_suffix('.normalized.mp3')
+
+        try:
+            logger.info(f"Applying single-pass normalization for {audio_path.name}")
+
+            filter_complex = (
+                f"acompressor=threshold=-20dB:ratio=4:attack=5:release=50:makeup=2dB,"
+                f"loudnorm=I={target_lufs}:TP={tp_db}:LRA=11"
+            )
+
+            cmd = [
+                'ffmpeg',
+                '-y',
+                '-i', str(audio_path),
+                '-af', filter_complex,
+                '-codec:a', 'libmp3lame',
+                '-b:a', '320k',
+                str(temp_output)
+            ]
+
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            temp_output.replace(audio_path)
+
+            logger.info(f"Single-pass normalization completed for {audio_path.name}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Single-pass normalization failed: {e}")
+            if temp_output.exists():
+                temp_output.unlink()
             return False
 
     def get_voices(self) -> List[Dict[str, Any]]:
