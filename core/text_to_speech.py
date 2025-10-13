@@ -239,18 +239,14 @@ class TextToSpeechCore:
 
     def normalize_audio(self, audio_path: Path, target_lufs: float = -14.0, tp_db: float = -1.0) -> bool:
         """
-        Apply comprehensive audio processing: compression, cleaning, and normalization.
+        Apply audio leveling and normalization to maintain consistent volume.
 
         Uses FFmpeg filter chain:
-        1. Dynamic compression - Reduces volume variations within audio
-        2. High-pass filter - Removes low-frequency rumble (<80Hz)
-        3. Noise reduction - FFT-based denoising for background noise
-        4. De-clicking - Removes clicks and pops
-        5. De-essing - Reduces harsh sibilance
-        6. Loudnorm - EBU R128 / ITU-R BS.1770 loudness standards
+        1. Dynamic compression - Reduces volume variations within audio (makes quiet parts louder)
+        2. Loudnorm - EBU R128 / ITU-R BS.1770 loudness standards
 
-        This ensures consistent voice levels throughout the file (prevents quieter voice over time),
-        removes audio artifacts and background noise, and normalizes loudness across all files.
+        This ensures consistent voice levels throughout the file (prevents quieter voice over time)
+        and normalizes loudness across all files.
 
         Args:
             audio_path: Path to audio file to normalize
@@ -266,8 +262,8 @@ class TextToSpeechCore:
         temp_output = audio_path.with_suffix('.normalized.mp3')
 
         try:
-            self.progress_callback(f"Applying compression, cleaning, and normalization (target: {target_lufs} LUFS)...")
-            logger.info(f"Processing audio for {audio_path.name}: compression → cleaning → normalization (target: {target_lufs} LUFS, peak: {tp_db} dBFS)")
+            self.progress_callback(f"Applying compression and normalization (target: {target_lufs} LUFS)...")
+            logger.info(f"Processing audio for {audio_path.name}: compression → normalization (target: {target_lufs} LUFS, peak: {tp_db} dBFS)")
 
             # FFmpeg filter chain:
             # 1. acompressor: Reduces dynamic range to keep voice consistent
@@ -275,25 +271,12 @@ class TextToSpeechCore:
             #    - ratio=4: 4:1 compression ratio (moderate)
             #    - attack=5ms, release=50ms: Fast response for speech
             #    - makeup=2dB: Slight gain boost after compression
-            # 2. highpass: Remove low-frequency rumble below 80Hz
-            # 3. afftdn: FFT-based noise reduction
-            #    - nf=-25: Noise floor in dB (moderate noise reduction)
-            # 4. adeclick: Remove clicks and pops
-            #    - t=2: Detection threshold (clicks)
-            #    - w=20: Window size for detection
-            # 5. deesser: Reduce harsh sibilance (s/sh sounds)
-            #    - i=0.1: Intensity (mild de-essing)
-            #    - f=0.5: Normalized frequency (0-1 range, 0.5 = Nyquist/2 ≈ 5.5kHz at 44.1kHz)
-            # 6. loudnorm: EBU R128 loudness normalization
+            # 2. loudnorm: EBU R128 loudness normalization
             #    - I=target_lufs: Integrated loudness target
             #    - TP=tp_db: True-peak ceiling
             #    - LRA=11: Loudness range target (standard for speech)
             filter_complex = (
                 f"acompressor=threshold=-20dB:ratio=4:attack=5:release=50:makeup=2dB,"
-                f"highpass=f=80,"
-                f"afftdn=nf=-25,"
-                f"adeclick=t=2:w=20,"
-                f"deesser=i=0.1:f=0.5,"
                 f"loudnorm=I={target_lufs}:TP={tp_db}:LRA=11"
             )
 
@@ -319,8 +302,8 @@ class TextToSpeechCore:
             # Replace original with normalized version
             temp_output.replace(audio_path)
 
-            self.progress_callback("Audio processing complete: compression, cleaning, and normalization applied")
-            logger.info(f"Successfully processed {audio_path.name}: compression → noise reduction → de-clicking → de-essing → loudnorm")
+            self.progress_callback("Audio processing complete: compression and normalization applied")
+            logger.info(f"Successfully processed {audio_path.name}: compression → loudnorm")
             return True
 
         except subprocess.CalledProcessError as e:
