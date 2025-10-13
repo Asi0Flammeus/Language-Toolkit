@@ -134,20 +134,18 @@ class TextToSpeechCore:
             self.voices = []
     
     def generate_audio(self, input_path: Path, output_path: Path,
-                      voice_id: str, voice_settings: Optional[Dict[str, Any]] = None,
-                      previous_request_ids: Optional[List[str]] = None) -> Tuple[bool, Optional[str]]:
+                      voice_id: str, voice_settings: Optional[Dict[str, Any]] = None) -> bool:
         """
-        Generate audio from text file with optional request stitching and normalization.
+        Generate audio from text file with normalization.
 
         Args:
             input_path: Path to input text file
             output_path: Path to output audio file
             voice_id: ElevenLabs voice ID
             voice_settings: Optional voice settings (stability, similarity_boost, style, use_speaker_boost)
-            previous_request_ids: Optional list of previous request IDs for stitching
 
         Returns:
-            Tuple of (success, request_id)
+            True if successful, False otherwise
         """
         try:
             self.progress_callback(f"Reading text file: {input_path}")
@@ -162,9 +160,9 @@ class TextToSpeechCore:
             text_length = len(text)
             logger.info(f"Processing text of {text_length} characters")
 
-            # Generate audio with optional request stitching
-            audio_data, request_id = self._generate_audio_from_text(
-                text, voice_id, voice_settings, previous_request_ids
+            # Generate audio
+            audio_data = self._generate_audio_from_text(
+                text, voice_id, voice_settings
             )
 
             # Save audio file
@@ -176,28 +174,26 @@ class TextToSpeechCore:
             self.normalize_audio(output_path, target_lufs=-14.0, tp_db=-1.0)
 
             self.progress_callback("Audio generation completed successfully")
-            return True, request_id
+            return True
 
         except Exception as e:
             error_msg = f"Failed to generate audio: {e}"
             logger.error(error_msg)
             self.progress_callback(f"Error: {error_msg}")
-            return False, None
+            return False
     
     def _generate_audio_from_text(self, text: str, voice_id: str,
-                                 voice_settings: Optional[Dict[str, Any]] = None,
-                                 previous_request_ids: Optional[List[str]] = None) -> Tuple[bytes, Optional[str]]:
+                                 voice_settings: Optional[Dict[str, Any]] = None) -> bytes:
         """
-        Generate audio from text using ElevenLabs API with optional request stitching.
+        Generate audio from text using ElevenLabs API.
 
         Args:
             text: Text to convert to speech
             voice_id: ElevenLabs voice ID
             voice_settings: Optional voice settings
-            previous_request_ids: Optional list of previous request IDs for stitching (max 3)
 
         Returns:
-            Tuple of (audio_bytes, request_id)
+            Audio bytes
         """
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
 
@@ -224,12 +220,6 @@ class TextToSpeechCore:
             "voice_settings": default_settings
         }
 
-        # Add request stitching if previous request IDs provided
-        if previous_request_ids:
-            # Limit to max 3 IDs as per ElevenLabs API
-            data["previous_request_ids"] = previous_request_ids[-3:]
-            logger.info(f"Using request stitching with {len(data['previous_request_ids'])} previous ID(s)")
-
         # Retry logic for network issues
         for attempt in range(1, self.MAX_RETRIES + 1):
             try:
@@ -238,12 +228,7 @@ class TextToSpeechCore:
                 response = requests.post(url, json=data, headers=headers)
                 response.raise_for_status()
 
-                # Capture request ID for stitching chain
-                request_id = response.headers.get('request-id')
-                if request_id:
-                    logger.debug(f"Captured request ID: {request_id}")
-
-                return response.content, request_id
+                return response.content
 
             except requests.exceptions.RequestException as e:
                 if attempt == self.MAX_RETRIES:
@@ -298,7 +283,7 @@ class TextToSpeechCore:
             #    - w=20: Window size for detection
             # 5. deesser: Reduce harsh sibilance (s/sh sounds)
             #    - i=0.1: Intensity (mild de-essing)
-            #    - f=6000: Frequency for sibilance detection
+            #    - f=0.5: Normalized frequency (0-1 range, 0.5 = Nyquist/2 ≈ 5.5kHz at 44.1kHz)
             # 6. loudnorm: EBU R128 loudness normalization
             #    - I=target_lufs: Integrated loudness target
             #    - TP=tp_db: True-peak ceiling
@@ -308,7 +293,7 @@ class TextToSpeechCore:
                 f"highpass=f=80,"
                 f"afftdn=nf=-25,"
                 f"adeclick=t=2:w=20,"
-                f"deesser=i=0.1:f=6000,"
+                f"deesser=i=0.1:f=0.5,"
                 f"loudnorm=I={target_lufs}:TP={tp_db}:LRA=11"
             )
 
@@ -458,10 +443,9 @@ class TextToSpeechCore:
             return False
     
     def text_to_speech_file(self, input_path: Path, output_path: Path,
-                            voice_settings: Optional[Dict[str, Any]] = None,
-                            previous_request_ids: Optional[List[str]] = None) -> Tuple[bool, Optional[str]]:
+                            voice_settings: Optional[Dict[str, Any]] = None) -> bool:
         """
-        Convert a text file to speech audio with intelligent voice detection and request stitching.
+        Convert a text file to speech audio with intelligent voice detection.
 
         This method extracts voice names from filenames by matching against the
         local voice mapping in elevenlabs_voices.json. It supports multiple
@@ -480,10 +464,9 @@ class TextToSpeechCore:
             input_path: Path to text file to convert
             output_path: Path where audio file will be saved
             voice_settings: Optional voice configuration overrides
-            previous_request_ids: Optional list of previous request IDs for stitching
 
         Returns:
-            Tuple of (success, request_id)
+            True if successful, False otherwise
         """
         # Extract voice name from filename using intelligent matching against local voice mapping
         voice_label = self.extract_voice_from_filename(input_path)
@@ -498,6 +481,6 @@ class TextToSpeechCore:
         if not voice_id:
             self.progress_callback("Error: Unable to determine voice ID for text-to-speech")
             logger.error("Unable to determine voice ID for TTS conversion of %s", input_path)
-            return False, None
+            return False
 
-        return self.generate_audio(input_path, output_path, voice_id, voice_settings, previous_request_ids)
+        return self.generate_audio(input_path, output_path, voice_id, voice_settings)

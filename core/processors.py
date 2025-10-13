@@ -55,71 +55,6 @@ from .validation import (
 
 logger = logging.getLogger(__name__)
 
-class BatchContext:
-    """
-    Track request IDs for request stitching across batch processing.
-
-    Maintains separate request ID chains per teacher/voice to enable
-    seamless voice continuity across multiple audio segments.
-    """
-
-    def __init__(self):
-        """Initialize batch context with empty request ID tracking."""
-        self.request_ids_by_teacher = {}  # {teacher_name: [id1, id2, id3]}
-        self._lock = threading.Lock()
-
-    def add_request(self, teacher_name: str, request_id: str) -> None:
-        """
-        Add request ID for teacher (keeps last 3).
-
-        Args:
-            teacher_name: Name of the teacher/voice
-            request_id: ElevenLabs request ID from API response
-        """
-        if not teacher_name or not request_id:
-            return
-
-        with self._lock:
-            if teacher_name not in self.request_ids_by_teacher:
-                self.request_ids_by_teacher[teacher_name] = []
-
-            ids = self.request_ids_by_teacher[teacher_name]
-            ids.append(request_id)
-
-            # Keep only last 3 request IDs (ElevenLabs limit)
-            if len(ids) > 3:
-                ids.pop(0)
-
-            logger.debug(f"Added request ID for {teacher_name}: {request_id} (total: {len(ids)})")
-
-    def get_previous_ids(self, teacher_name: str) -> List[str]:
-        """
-        Get previous request IDs for teacher.
-
-        Args:
-            teacher_name: Name of the teacher/voice
-
-        Returns:
-            List of previous request IDs (max 3)
-        """
-        with self._lock:
-            return self.request_ids_by_teacher.get(teacher_name, []).copy()
-
-    def reset(self, teacher_name: Optional[str] = None) -> None:
-        """
-        Clear context for specific teacher or all teachers.
-
-        Args:
-            teacher_name: Specific teacher to reset, or None for all
-        """
-        with self._lock:
-            if teacher_name:
-                self.request_ids_by_teacher.pop(teacher_name, None)
-                logger.debug(f"Reset context for {teacher_name}")
-            else:
-                self.request_ids_by_teacher.clear()
-                logger.debug("Reset all batch context")
-
 class ProcessingStatus(Enum):
     """Status of processing operations"""
     PENDING = "pending"
@@ -811,7 +746,6 @@ class AudioProcessor(FileProcessor):
                                    input_path: Path,
                                    output_path: Path,
                                    operation: str,
-                                   batch_context: Optional[BatchContext] = None,
                                    **options) -> ProcessingResult:
         """
         Implement audio processing.
@@ -820,7 +754,6 @@ class AudioProcessor(FileProcessor):
             input_path: Input file path
             output_path: Output file path
             operation: Type of operation ('transcribe' or 'synthesize')
-            batch_context: Optional BatchContext for request stitching
             **options: Operation-specific options
 
         Returns:
@@ -830,7 +763,7 @@ class AudioProcessor(FileProcessor):
             if operation == 'transcribe':
                 return self._process_transcription(input_path, output_path, **options)
             elif operation == 'synthesize':
-                return self._process_text_to_speech(input_path, output_path, batch_context, **options)
+                return self._process_text_to_speech(input_path, output_path, **options)
             else:
                 raise ValueError(f"Unknown audio operation: {operation}")
 
@@ -866,15 +799,13 @@ class AudioProcessor(FileProcessor):
             raise RuntimeError("Transcription service returned failure")
     
     def _process_text_to_speech(self, input_path: Path, output_path: Path,
-                                batch_context: Optional[BatchContext] = None,
                                 **options) -> ProcessingResult:
         """
-        Process text-to-speech using ElevenLabs with optional batch context for request stitching.
+        Process text-to-speech using ElevenLabs.
 
         Args:
             input_path: Input text file path
             output_path: Output audio file path
-            batch_context: Optional BatchContext for request stitching across files
             **options: Additional voice settings
 
         Returns:
@@ -888,26 +819,14 @@ class AudioProcessor(FileProcessor):
             progress_callback=self.progress_reporter.report_progress
         )
 
-        # Extract teacher name from filename for request stitching
+        # Extract teacher name from filename
         teacher_name = tts.extract_voice_from_filename(input_path)
 
-        # Get previous request IDs if same teacher and batch context available
-        previous_request_ids = None
-        if batch_context and teacher_name:
-            previous_request_ids = batch_context.get_previous_ids(teacher_name)
-            if previous_request_ids:
-                logger.info(f"Using {len(previous_request_ids)} previous request IDs for {teacher_name}")
-
-        # Perform text-to-speech with request stitching
-        success, request_id = tts.text_to_speech_file(
+        # Perform text-to-speech
+        success = tts.text_to_speech_file(
             input_path, output_path,
-            voice_settings=options.get('voice_settings'),
-            previous_request_ids=previous_request_ids
+            voice_settings=options.get('voice_settings')
         )
-
-        # Update batch context with new request ID
-        if batch_context and teacher_name and request_id:
-            batch_context.add_request(teacher_name, request_id)
 
         if success:
             return ProcessingResult(
@@ -917,9 +836,7 @@ class AudioProcessor(FileProcessor):
                 message=f"Generated speech for {input_path.name}",
                 metadata={
                     "operation": "synthesize",
-                    "teacher": teacher_name,
-                    "request_id": request_id,
-                    "used_stitching": bool(previous_request_ids)
+                    "teacher": teacher_name
                 }
             )
         else:

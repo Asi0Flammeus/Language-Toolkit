@@ -508,12 +508,14 @@ class VideoMergerCore:
                         self.progress_callback(f"Using original audio for slide {idx+1} of {len(file_pairs)}")
                     
                     # Create video segment from image and audio
+                    # Apply audio filter to maintain consistent volume across all segments
                     cmd = [
                         'ffmpeg', '-y',
                         '-loop', '1',
                         '-i', str(image_file),
                         '-i', str(actual_audio_file),
                         '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2',
+                        '-af', 'loudnorm=I=-14:TP=-1:LRA=11',  # Apply loudness normalization to maintain consistency
                         '-c:v', 'libx264',
                         '-tune', 'stillimage',
                         '-c:a', 'aac',

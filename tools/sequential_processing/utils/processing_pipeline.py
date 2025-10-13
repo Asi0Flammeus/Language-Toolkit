@@ -46,7 +46,7 @@ class ProcessingPipeline:
                          skip_existing: bool = True) -> ProcessingResult:
         """
         Process all files in a subfolder.
-        
+
         Args:
             subfolder_path: Path to the subfolder to process
             output_path: Root output path for this language
@@ -55,19 +55,19 @@ class ProcessingPipeline:
             relative_path: Relative path from input root
             use_intro: Whether to add intro video
             skip_existing: Whether to skip files that already exist
-            
+
         Returns:
             ProcessingResult containing all generated files
         """
         result = ProcessingResult()
-        
+
         # Create output subdirectory preserving structure
         if relative_path != '.':
             subfolder_output = output_path / relative_path
         else:
             subfolder_output = output_path
         subfolder_output.mkdir(parents=True, exist_ok=True)
-        
+
         self.progress_callback(f"\n📁 Processing folder: {relative_path}")
         
         # Step 1: Process PPTX files
