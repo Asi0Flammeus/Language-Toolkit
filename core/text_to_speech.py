@@ -254,11 +254,14 @@ class TextToSpeechCore:
 
     def normalize_audio(self, audio_path: Path, target_lufs: float = -14.0, tp_db: float = -1.0) -> bool:
         """
-        Apply LUFS-based loudness normalization to audio file.
+        Apply loudness normalization and compression to maintain consistent voice levels.
 
-        Uses pyloudnorm for proper loudness measurement and normalization according
-        to EBU R128 / ITU-R BS.1770 standards. This ensures consistent perceived
-        loudness across all generated audio files.
+        Uses FFmpeg with:
+        1. Dynamic compression to reduce volume variations within the audio
+        2. Loudnorm filter for EBU R128 / ITU-R BS.1770 loudness standards
+
+        This ensures consistent voice levels throughout the file (prevents quieter voice over time)
+        and consistent loudness across all files.
 
         Args:
             audio_path: Path to audio file to normalize
@@ -268,56 +271,63 @@ class TextToSpeechCore:
         Returns:
             True if normalization was applied successfully, False otherwise
         """
-        try:
-            import numpy as np
-            import soundfile as sf
-            import librosa
-            import pyloudnorm as pyln
+        import subprocess
 
-            self.progress_callback(f"Applying LUFS-based loudness normalization (target: {target_lufs} LUFS)...")
+        # Temp output path
+        temp_output = audio_path.with_suffix('.normalized.mp3')
+
+        try:
+            self.progress_callback(f"Applying compression and loudness normalization (target: {target_lufs} LUFS)...")
             logger.info(f"Normalizing audio for {audio_path.name} (target: {target_lufs} LUFS, peak: {tp_db} dBFS)")
 
-            # Load audio (preserve sample rate, keep stereo if present)
-            y, sr = librosa.load(str(audio_path), sr=None, mono=False)
-            if y.ndim == 1:
-                y = y[None, :]  # (1, N) for mono
+            # FFmpeg filter chain:
+            # 1. acompressor: Reduces dynamic range to keep voice consistent
+            #    - threshold=-20dB: Start compressing above -20dB
+            #    - ratio=4: 4:1 compression ratio (moderate)
+            #    - attack=5ms, release=50ms: Fast response for speech
+            #    - makeup=2dB: Slight gain boost after compression
+            # 2. loudnorm: EBU R128 loudness normalization
+            #    - I=target_lufs: Integrated loudness target
+            #    - TP=tp_db: True-peak ceiling
+            #    - LRA=11: Loudness range target (standard for speech)
+            filter_complex = (
+                f"acompressor=threshold=-20dB:ratio=4:attack=5:release=50:makeup=2dB,"
+                f"loudnorm=I={target_lufs}:TP={tp_db}:LRA=11"
+            )
 
-            # Measure loudness on mono mixdown (apply same gain to all channels)
-            meter = pyln.Meter(sr, block_size=0.400, filter_class="K-weighting")
-            loudness = meter.integrated_loudness(y.mean(axis=0))
+            cmd = [
+                'ffmpeg',
+                '-y',  # Overwrite output
+                '-i', str(audio_path),
+                '-af', filter_complex,
+                '-codec:a', 'libmp3lame',
+                '-b:a', '320k',
+                str(temp_output)
+            ]
 
-            logger.debug(f"Measured loudness: {loudness:.2f} LUFS")
+            logger.debug(f"Running FFmpeg command: {' '.join(cmd)}")
 
-            # Calculate gain adjustment
-            gain_db = target_lufs - loudness
-            y_gain = y * (10 ** (gain_db / 20.0))
+            result = subprocess.run(
+                cmd,
+                check=True,
+                capture_output=True,
+                text=True
+            )
 
-            logger.debug(f"Applied gain: {gain_db:.2f} dB")
+            # Replace original with normalized version
+            temp_output.replace(audio_path)
 
-            # True-peak safety ceiling
-            tp_lin = 10 ** (tp_db / 20.0)  # -1 dBFS -> ~0.89
-            peak = np.max(np.abs(y_gain))
-            if peak > tp_lin:
-                logger.debug(f"Peak {peak:.4f} exceeds ceiling {tp_lin:.4f}, clipping")
-                y_gain = np.clip(y_gain, -tp_lin, tp_lin)
-
-            # Write temp WAV (best quality before MP3 encoding)
-            wav_out = str(audio_path).replace(".mp3", "_tmp.wav")
-            sf.write(wav_out, y_gain.T, sr, subtype="PCM_16")
-
-            # Encode to MP3 via ffmpeg (requires ffmpeg in PATH)
-            import subprocess
-            import shlex
-            import os
-
-            cmd = f'ffmpeg -y -i {shlex.quote(wav_out)} -codec:a libmp3lame -b:a 320k {shlex.quote(str(audio_path))}'
-            result = subprocess.run(cmd, shell=True, check=True, capture_output=True, text=True)
-            os.remove(wav_out)
-
-            self.progress_callback("Loudness normalization applied successfully")
-            logger.info(f"Successfully normalized {audio_path.name} from {loudness:.2f} LUFS to {target_lufs:.2f} LUFS")
+            self.progress_callback("Compression and loudness normalization applied successfully")
+            logger.info(f"Successfully normalized {audio_path.name} with compression and loudnorm")
             return True
 
+        except subprocess.CalledProcessError as e:
+            logger.warning(f"Normalization failed for {audio_path.name}: {e.stderr}")
+            self.progress_callback(f"Warning: Normalization failed - {e.stderr}")
+            # Clean up temp file if it exists
+            if temp_output.exists():
+                temp_output.unlink()
+            return False
         except Exception as e:
             logger.warning(f"Normalization failed for {audio_path.name}: {e}")
             self.progress_callback(f"Warning: Normalization failed - {e}")
