@@ -2,11 +2,13 @@
 
 import logging
 import re
+import os
 from pathlib import Path
 from typing import Any, Dict, Optional, Callable, List, Tuple
 
 from . import CoreToolAdapter
 from core.video_merger import VideoMergerCore
+from ..utils.filename_cleaner import FilenameCleanerUtility
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +19,7 @@ class VideoMergerAdapter(CoreToolAdapter):
     def __init__(self, progress_callback: Optional[Callable[[str], None]] = None):
         """
         Initialize video merger adapter.
-        
+
         Args:
             progress_callback: Optional callback for progress updates
         """
@@ -25,6 +27,10 @@ class VideoMergerAdapter(CoreToolAdapter):
         self.tool = None
         # Path to intro media file (same as video merger tool)
         self.intro_path = Path(__file__).parent.parent.parent.parent / "media" / "planB_intro.mp4"
+
+        # Initialize filename cleaner for removing voice names
+        api_key = os.getenv('ELEVENLABS_API_KEY')
+        self.filename_cleaner = FilenameCleanerUtility(api_key=api_key)
     
     def _initialize_tool(self):
         """Initialize the core tool if not already done."""
@@ -125,18 +131,22 @@ class VideoMergerAdapter(CoreToolAdapter):
             
             # Sort file pairs by numeric ID (already done in match_file_pairs)
             
-            # Generate output filename based on the first MP3 file (remove 2-digit identifier)
-            # This is EXACTLY how video merger does it
+            # Generate output filename based on the first MP3 file
             if file_pairs:
                 _, first_mp3, _ = file_pairs[0]
                 mp3_stem = first_mp3.stem
+
+                # First remove 2-digit identifier
                 identifier_pattern = r'[_-](\d{2})(?:[_-])'
                 output_name = re.sub(identifier_pattern, '_', mp3_stem)
                 end_pattern = r'[_-]\d{2}$'
                 output_name = re.sub(end_pattern, '', output_name)
-                
+
+                # Then remove voice names using the filename cleaner
+                cleaned_filename = self.filename_cleaner.remove_voice_from_filename(output_name)
+
                 # Update output path with cleaned name
-                output_path = output_path.parent / f"{output_name}.mp4"
+                output_path = output_path.parent / f"{cleaned_filename}.mp4"
                 self.report_progress(f"Output file will be: {output_path}")
                 
                 # Check if output already exists

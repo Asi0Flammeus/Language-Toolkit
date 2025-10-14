@@ -7,6 +7,7 @@ import re
 import subprocess
 import logging
 from pathlib import Path
+import requests
 
 from ui.base_tool import ToolBase
 
@@ -35,9 +36,90 @@ class VideoMergeTool(ToolBase):
         self.use_intro = tk.BooleanVar(value=False)
         # Path to intro media file
         self.intro_path = Path(__file__).parent.parent / "media" / "planB_intro.mp4"
-        
+
+        # Initialize voice names for filename cleaning
+        self.voice_names = set()
+        self._load_voice_names()
+
         # Check dependencies
         self._check_dependencies()
+
+    def _load_voice_names(self):
+        """Load voice names from ElevenLabs API or use fallback list."""
+        api_key = os.getenv('ELEVENLABS_API_KEY')
+
+        if api_key:
+            try:
+                url = "https://api.elevenlabs.io/v1/voices"
+                headers = {"xi-api-key": api_key}
+                response = requests.get(url, headers=headers, params={"show_legacy": "false"}, timeout=5)
+
+                if response.status_code == 200:
+                    data = response.json()
+                    voices = data.get("voices", [])
+
+                    # Extract all voice names
+                    for voice in voices:
+                        name = voice.get("name", "").strip()
+                        if name:
+                            self.voice_names.add(name)
+                            self.voice_names.add(name.lower())
+
+                    logging.debug(f"Loaded {len(voices)} voice names from ElevenLabs API")
+                    return
+            except Exception as e:
+                logging.debug(f"Failed to load voices from API: {e}")
+
+        # Use fallback voice names
+        self._use_fallback_voice_names()
+
+    def _use_fallback_voice_names(self):
+        """Use a fallback list of common ElevenLabs voice names."""
+        fallback_names = [
+            "Rachel", "Domi", "Bella", "Antoni", "Elli", "Josh", "Arnold",
+            "Adam", "Sam", "Dorothy", "Nicole", "Charlotte", "Emily", "Matilda",
+            "Matthew", "James", "Joseph", "Harry", "Ethan", "Chris", "Gigi",
+            "Freya", "Brian", "Grace", "Daniel", "Lily", "Charlie", "George",
+            "Callum", "Patrick", "Fin", "Sarah", "Laura", "Bill", "Jessica",
+            "Eric", "Liam", "Thomas", "Drew", "Paul", "Jessie", "Clyde",
+            "Dave", "Serena", "Michael", "Aria", "Roger", "Alice", "Valentino",
+            "Fanis", "Loic", "Rogzy", "Santa", "Amy", "Emma", "Anna", "Jenny",
+            "Will"
+        ]
+
+        for name in fallback_names:
+            self.voice_names.add(name)
+            self.voice_names.add(name.lower())
+
+        logging.debug(f"Using {len(fallback_names)} fallback voice names")
+
+    def _remove_voice_from_filename(self, filename):
+        """Remove voice names from a filename."""
+        if not self.voice_names:
+            return filename
+
+        original = filename
+
+        # Check each voice name
+        for voice_name in self.voice_names:
+            # Create patterns to match the voice name with separators
+            patterns = [
+                rf'[_\-]{re.escape(voice_name)}[_\-]',  # Surrounded by separators
+                rf'^{re.escape(voice_name)}[_\-]',       # At start
+                rf'[_\-]{re.escape(voice_name)}$',       # At end
+            ]
+
+            for pattern in patterns:
+                filename = re.sub(pattern, '_', filename, flags=re.IGNORECASE)
+
+        # Clean up multiple underscores/hyphens
+        filename = re.sub(r'[_\-]{2,}', '_', filename)
+        filename = filename.strip('_-')
+
+        if filename != original:
+            logging.debug(f"Cleaned filename: '{original}' -> '{filename}'")
+
+        return filename or "output"
 
     def _check_dependencies(self):
         """Check if ffmpeg is installed and available."""
@@ -166,13 +248,19 @@ class VideoMergeTool(ToolBase):
             self.send_progress_update(f"Found {len(file_pairs)} matching pairs in {input_dir}")
             # Sort file pairs by numeric ID
             file_pairs.sort(key=lambda x: x[0])
-            # Generate output filename based on the first MP3 file (remove 2-digit identifier)
+            # Generate output filename based on the first MP3 file
             _, first_mp3, _ = file_pairs[0]
             mp3_stem = first_mp3.stem
+
+            # First remove 2-digit identifier
             identifier_pattern = r'[_-](\d{2})(?:[_-])'
             output_name = re.sub(identifier_pattern, '_', mp3_stem)
             end_pattern = r'[_-]\d{2}$'
             output_name = re.sub(end_pattern, '', output_name)
+
+            # Then remove voice names
+            output_name = self._remove_voice_from_filename(output_name)
+
             # Ensure output directory exists
             output_dir.mkdir(parents=True, exist_ok=True)
             output_file = output_dir / f"{output_name}.mp4"
@@ -197,13 +285,19 @@ class VideoMergeTool(ToolBase):
             self.send_progress_update(f"Found {len(file_pairs)} matching pairs in {curr_dir}")
             # Sort file pairs by numeric ID
             file_pairs.sort(key=lambda x: x[0])
-            # Generate output filename based on the first MP3 file (remove 2-digit identifier)
+            # Generate output filename based on the first MP3 file
             _, first_mp3, _ = file_pairs[0]
             mp3_stem = first_mp3.stem
+
+            # First remove 2-digit identifier
             identifier_pattern = r'[_-](\d{2})(?:[_-])'
             output_name = re.sub(identifier_pattern, '_', mp3_stem)
             end_pattern = r'[_-]\d{2}$'
             output_name = re.sub(end_pattern, '', output_name)
+
+            # Then remove voice names
+            output_name = self._remove_voice_from_filename(output_name)
+
             output_file = curr_dir / f"{output_name}.mp4"
             self.send_progress_update(f"Output file will be: {output_file}")
             # Create the output video
