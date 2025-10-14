@@ -445,13 +445,15 @@ class SequentialOrchestrator:
                 'it': 'Italian',
                 'pt': 'Portuguese',
                 'ru': 'Russian',
-                'zh': 'Chinese',
+                'zh-hans': 'Chinese (Simplified)',
+                'zh-hant': 'Chinese (Traditional)',
                 'ja': 'Japanese',
                 'ko': 'Korean'
             },
             # Target languages: Full ElevenLabs Multilingual v2 support (29 languages)
             'target_languages': {
-                'zh': 'Chinese',
+                'zh-hans': 'Chinese (Simplified)',
+                'zh-hant': 'Chinese (Traditional)',
                 'cs': 'Czech',
                 'da': 'Danish',
                 'nl': 'Dutch',

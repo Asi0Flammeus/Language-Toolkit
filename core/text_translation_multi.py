@@ -142,16 +142,18 @@ class DeepLTranslator(BaseTranslator):
     def _map_language_code(self, code: str, is_source: bool) -> str:
         """Map language codes to DeepL format."""
         code = code.upper()
-        
+
         # Handle specific mappings
         mappings = {
             'EN': 'EN-US' if not is_source else 'EN',
             'PT': 'PT-PT' if not is_source else 'PT',
             'ZH': 'ZH-HANS',
+            'ZH-HANS': 'ZH-HANS',
+            'ZH-HANT': 'ZH-HANT',
             'NB-NO': 'NB',
             'NB': 'NB'
         }
-        
+
         return mappings.get(code, code)
 
 
