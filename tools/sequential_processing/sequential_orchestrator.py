@@ -281,6 +281,18 @@ class SequentialOrchestrator:
             summary = self.pipeline.get_summary(all_results)
             self.progress_callback(summary)
 
+            # Report skipped folders due to PNG/MP3 count mismatch
+            if hasattr(self.pipeline, 'adapters') and 'video_merger' in self.pipeline.adapters:
+                video_adapter = self.pipeline.adapters['video_merger']
+                if hasattr(video_adapter, 'skipped_folders') and video_adapter.skipped_folders:
+                    self.progress_callback("\n" + "=" * 60)
+                    self.progress_callback("📋 FOLDERS SKIPPED DUE TO PNG/MP3 COUNT MISMATCH:")
+                    for folder in video_adapter.skipped_folders:
+                        self.progress_callback(f"   ⚠️ {folder}")
+                    self.progress_callback("=" * 60 + "\n")
+                    # Clear the list for next run
+                    video_adapter.skipped_folders.clear()
+
             error_summary = self.error_handler.get_error_summary()
             self.progress_callback(error_summary)
 
@@ -381,6 +393,18 @@ class SequentialOrchestrator:
 
             summary = self.pipeline.get_summary(all_results)
             self.progress_callback(summary)
+
+            # Report skipped folders due to PNG/MP3 count mismatch
+            if hasattr(self.pipeline, 'adapters') and 'video_merger' in self.pipeline.adapters:
+                video_adapter = self.pipeline.adapters['video_merger']
+                if hasattr(video_adapter, 'skipped_folders') and video_adapter.skipped_folders:
+                    self.progress_callback("\n" + "=" * 60)
+                    self.progress_callback("📋 FOLDERS SKIPPED DUE TO PNG/MP3 COUNT MISMATCH:")
+                    for folder in video_adapter.skipped_folders:
+                        self.progress_callback(f"   ⚠️ {folder}")
+                    self.progress_callback("=" * 60 + "\n")
+                    # Clear the list for next run
+                    video_adapter.skipped_folders.clear()
 
             error_summary = self.error_handler.get_error_summary()
             self.progress_callback(error_summary)

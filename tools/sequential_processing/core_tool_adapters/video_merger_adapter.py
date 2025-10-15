@@ -31,6 +31,9 @@ class VideoMergerAdapter(CoreToolAdapter):
         # Initialize filename cleaner for removing voice names
         api_key = os.getenv('ELEVENLABS_API_KEY')
         self.filename_cleaner = FilenameCleanerUtility(api_key=api_key)
+        
+        # Track folders skipped due to PNG/MP3 count mismatch
+        self.skipped_folders = []
     
     def _initialize_tool(self):
         """Initialize the core tool if not already done."""
@@ -99,7 +102,7 @@ class VideoMergerAdapter(CoreToolAdapter):
                 - 'use_intro': Boolean flag to use intro
             
         Returns:
-            True if successful, False otherwise
+            True if successful OR if gracefully skipped due to mismatch, False for actual errors
         """
         self._initialize_tool()
         
@@ -113,21 +116,77 @@ class VideoMergerAdapter(CoreToolAdapter):
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
         try:
+            # VERIFICATION: Check if PNG count matches MP3 count
+            if len(image_files) != len(audio_files):
+                self.report_progress("=" * 60)
+                self.report_progress("❌ PNG/MP3 COUNT MISMATCH - SKIPPING VIDEO CREATION")
+                self.report_progress(f"   Folder: {input_path.name}")
+                self.report_progress(f"   Found {len(image_files)} PNG files")
+                self.report_progress(f"   Found {len(audio_files)} MP3 files")
+                
+                # Find which indices are missing matches
+                png_indices = set()
+                mp3_indices = set()
+                id_pattern = re.compile(r'(?<!\d)(\d{2})(?!\d)')
+                
+                for png_file in image_files:
+                    match = id_pattern.search(png_file.name)
+                    if match:
+                        png_indices.add(match.group(1))
+                
+                for mp3_file in audio_files:
+                    match = id_pattern.search(mp3_file.name)
+                    if match:
+                        mp3_indices.add(match.group(1))
+                
+                # Report missing matches
+                png_only = png_indices - mp3_indices
+                mp3_only = mp3_indices - png_indices
+                
+                if png_only:
+                    self.report_progress(f"   PNG files without matching MP3: {', '.join(sorted(png_only))}")
+                if mp3_only:
+                    self.report_progress(f"   MP3 files without matching PNG: {', '.join(sorted(mp3_only))}")
+                
+                self.report_progress("   ⚠️  Video compilation requires equal number of PNG and MP3 files")
+                self.report_progress("   ⚠️  Please ensure all slides have corresponding audio files")
+                self.report_progress("   ⏭️  Continuing to next folder...")
+                self.report_progress("=" * 60)
+                
+                # Track this skipped folder
+                self.skipped_folders.append(str(input_path))
+                
+                # Return True to indicate graceful handling (not a critical error)
+                # This allows the process to continue to the next folder
+                return True
+            
             # Match MP3 and PNG files using the exact same logic as video merger
             if not audio_files or not image_files:
                 self.report_progress("✗ Need both audio and image files to create video")
-                return False
+                # This is also a graceful skip, not a critical error
+                self.skipped_folders.append(str(input_path))
+                return True
             
-            self.report_progress(f"Found {len(audio_files)} MP3 and {len(image_files)} PNG files")
+            self.report_progress(f"✓ Counts match: {len(audio_files)} MP3 and {len(image_files)} PNG files")
             
             # Match files by identifier (EXACT same as video merger)
             file_pairs = self.match_file_pairs(audio_files, image_files)
             
             if not file_pairs:
                 self.report_progress("✗ No matching MP3/PNG pairs found")
-                return False
+                self.skipped_folders.append(str(input_path))
+                return True
             
-            self.report_progress(f"Found {len(file_pairs)} matching pairs")
+            # Additional verification: Check if all pairs are complete
+            if len(file_pairs) != len(audio_files):
+                self.report_progress(f"⚠️  Warning: Only {len(file_pairs)} matched pairs from {len(audio_files)} files")
+                self.report_progress("   Some files could not be matched by index")
+                self.report_progress("   ⏭️  Skipping this folder and continuing...")
+                self.skipped_folders.append(str(input_path))
+                # Still skip if not all files could be matched
+                return True
+            
+            self.report_progress(f"✓ Successfully matched {len(file_pairs)} file pairs")
             
             # Sort file pairs by numeric ID (already done in match_file_pairs)
             

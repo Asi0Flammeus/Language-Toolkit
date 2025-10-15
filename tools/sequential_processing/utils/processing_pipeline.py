@@ -160,7 +160,12 @@ class ProcessingPipeline:
             )
             if video_file:
                 result.video_files.append(video_file)
+            elif video_file is None and len(result.png_files) != len(result.audio_files):
+                # Count mismatch - this was already reported, don't add as error
+                # The folder was skipped gracefully
+                pass
             else:
+                # Actual error in video generation
                 result.errors.append(f"Failed to generate video for {relative_path}")
         
         return result
@@ -324,7 +329,12 @@ class ProcessingPipeline:
             )
             if video_file:
                 result.video_files.append(video_file)
+            elif video_file is None and len(result.png_files) != len(result.audio_files):
+                # Count mismatch - this was already reported, don't add as error
+                # The folder was skipped gracefully
+                pass
             else:
+                # Actual error in video generation
                 result.errors.append(f"Failed to generate video for {relative_path}")
 
         return result
@@ -394,6 +404,19 @@ class ProcessingPipeline:
         """Generate video from images and audio."""
         if 'video_merger' not in self.adapters:
             self.progress_callback("⚠️ Video merger not available")
+            return None
+        
+        # VERIFICATION: Check PNG/MP3 counts before attempting video generation
+        if len(png_files) != len(audio_files):
+            self.progress_callback("=" * 60)
+            self.progress_callback(f"❌ PNG/MP3 count mismatch in {output_dir.name}")
+            self.progress_callback(f"   PNG files: {len(png_files)}")
+            self.progress_callback(f"   MP3 files: {len(audio_files)}")
+            self.progress_callback("   Skipping video generation - counts must match")
+            self.progress_callback("   ⏭️  Continuing to next folder...")
+            self.progress_callback("=" * 60)
+            # Don't treat this as an error, it's a graceful skip
+            # The video merger adapter will handle tracking skipped folders
             return None
         
         # Check for intro video based on use_intro flag
