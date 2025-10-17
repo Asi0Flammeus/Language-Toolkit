@@ -454,50 +454,57 @@ class SequentialOrchestrator:
         """
         Get supported languages for translation and TTS.
 
-        Target languages match ElevenLabs Multilingual v2 support (29 languages).
+        Reads from language_providers.json to ensure consistency with actual translation behavior.
 
         Returns:
             Dictionary with source and target language options
         """
-        # Common source languages (DeepL support)
-        languages = {
+        # Try to get languages from the translator adapters (which use ConfigBasedTranslator)
+        if 'pptx_translator' in self.adapters:
+            try:
+                # Get supported languages from the ConfigBasedTranslator
+                translator = self.adapters['pptx_translator']
+                if hasattr(translator, 'core') and hasattr(translator.core, 'language_map'):
+                    language_map = translator.core.language_map
+                    
+                    # Build source and target language lists
+                    source_languages = {}
+                    target_languages = {}
+                    
+                    for code, info in language_map.items():
+                        # Skip variant codes (only use primary codes)
+                        if code in ['zh-Hans', 'zh-Hant', 'nb-NO', 'sr-Latn', 'pt', 'en', 
+                                   'cs', 'da', 'nl', 'fi', 'fr', 'de', 'hi', 'id', 'it', 
+                                   'ja', 'ko', 'pl', 'ru', 'es', 'sv', 'tr', 'uk',
+                                   'et', 'ro', 'fa', 'rn', 'si', 'sw', 'th', 'vi',
+                                   'zh-hans', 'zh-hant', 'nb-no', 'sr-latn']:
+                            name = info['name']
+                            
+                            # Common source languages
+                            if code in ['en', 'es', 'fr', 'de', 'it', 'pt', 'ru', 
+                                       'zh-hans', 'zh-hant', 'ja', 'ko']:
+                                source_languages[code] = name
+                            
+                            # All configured languages as targets
+                            target_languages[code] = name
+                    
+                    return {
+                        'source_languages': source_languages,
+                        'target_languages': target_languages
+                    }
+            except Exception as e:
+                logger.warning(f"Failed to get languages from translator: {e}")
+        
+        # Fallback to minimal language set if translator not available
+        return {
             'source_languages': {
                 'en': 'English',
                 'es': 'Spanish',
                 'fr': 'French',
-                'de': 'German',
-                'it': 'Italian',
-                'pt': 'Portuguese',
-                'ru': 'Russian',
-                'zh-hans': 'Chinese (Simplified)',
-                'zh-hant': 'Chinese (Traditional)',
-                'ja': 'Japanese',
-                'ko': 'Korean'
             },
-            # Target languages: Full ElevenLabs Multilingual v2 support (29 languages)
             'target_languages': {
-                'zh-hans': 'Chinese (Simplified)',
-                'zh-hant': 'Chinese (Traditional)',
-                'cs': 'Czech',
-                'da': 'Danish',
-                'nl': 'Dutch',
                 'en': 'English',
-                'fi': 'Finnish',
-                'fr': 'French',
-                'de': 'German',
-                'hi': 'Hindi',
-                'id': 'Indonesian',
-                'it': 'Italian',
-                'ja': 'Japanese',
-                'ko': 'Korean',
-                'pl': 'Polish',
-                'pt': 'Portuguese',
-                'ru': 'Russian',
                 'es': 'Spanish',
-                'sv': 'Swedish',
-                'tr': 'Turkish',
-                'uk': 'Ukrainian'
+                'fr': 'French',
             }
         }
-
-        return languages
