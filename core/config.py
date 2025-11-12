@@ -220,6 +220,7 @@ class ConfigManager:
             "openai": "OPENAI_API_KEY",
             "anthropic": "ANTHROPIC_API_KEY", 
             "deepl": "DEEPL_API_KEY",
+            "google": "GOOGLE_API_KEY",
             "convertapi": "CONVERTAPI_KEY",
             "elevenlabs": "ELEVENLABS_API_KEY"
         }

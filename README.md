@@ -43,6 +43,62 @@ Access points:
 - Asynchronous task processing
 - Smart file handling (single files or ZIP archives)
 
+## 🌍 Supported Languages
+
+The Language Toolkit supports 29 languages across translation (txt/pptx) and text-to-speech (TTS) services.
+
+### Language Support Matrix
+
+| Language | Code | Translation Provider | TXT | PPTX | ElevenLabs TTS |
+|----------|------|---------------------|-----|------|----------------|
+| Czech | cs | DeepL | ✅ | ✅ | ✅ |
+| German | de | DeepL | ✅ | ✅ | ✅ |
+| English | en | DeepL | ✅ | ✅ | ✅ |
+| Spanish | es | DeepL | ✅ | ✅ | ✅ |
+| Estonian | et | DeepL | ✅ | ✅ | ❌ |
+| Farsi | fa | OpenAI | ✅ | ✅ | ❌ |
+| Finnish | fi | DeepL | ✅ | ✅ | ✅ |
+| French | fr | DeepL | ✅ | ✅ | ✅ |
+| Hindi | hi | Google | ✅ | ✅ | ✅ |
+| Indonesian | id | DeepL | ✅ | ✅ | ✅ |
+| Italian | it | DeepL | ✅ | ✅ | ✅ |
+| Japanese | ja | DeepL | ✅ | ✅ | ✅ |
+| Korean | ko | DeepL | ✅ | ✅ | ✅ |
+| Norwegian | nb-NO | DeepL | ✅ | ✅ | ❌ |
+| Dutch | nl | DeepL | ✅ | ✅ | ✅ |
+| Polish | pl | DeepL | ✅ | ✅ | ✅ |
+| Portuguese | pt | DeepL | ✅ | ✅ | ✅ |
+| Rundi | rn | Google | ✅ | ✅ | ❌ |
+| Romanian | ro | DeepL | ✅ | ✅ | ✅ |
+| Russian | ru | DeepL | ✅ | ✅ | ✅ |
+| Sinhala | si | OpenAI | ✅ | ✅ | ❌ |
+| Serbian (Latin) | sr-Latn | OpenAI | ✅ | ✅ | ❌ |
+| Swedish | sv | DeepL | ✅ | ✅ | ✅ |
+| Swahili | sw | Google | ✅ | ✅ | ❌ |
+| Thai | th | OpenAI | ✅ | ✅ | ❌ |
+| Turkish | tr | DeepL | ✅ | ✅ | ✅ |
+| Vietnamese | vi | Google | ✅ | ✅ | ❌ |
+| Chinese Simplified | zh-Hans | DeepL | ✅ | ✅ | ✅ |
+| Chinese Traditional | zh-Hant | DeepL | ✅ | ✅ | ✅ |
+
+### Provider Summary
+
+**Translation Providers:**
+- **DeepL** (21 languages): Premium European & Asian language translation
+- **Google Translate** (4 languages): Broad language coverage for Hindi, Rundi, Swahili, Vietnamese
+- **OpenAI GPT-4** (4 languages): Context-aware translation for Farsi, Sinhala, Serbian, Thai
+
+**Text-to-Speech:**
+- **ElevenLabs Multilingual V2** (20 languages): Natural voice synthesis with high quality
+- **Not Supported** (9 languages): Estonian, Farsi, Norwegian, Rundi, Sinhala, Serbian, Swahili, Thai, Vietnamese
+
+### Notes
+
+- **Translation (TXT/PPTX)**: All 29 languages supported with automatic provider selection
+- **TTS**: 20 languages supported via ElevenLabs multilingual_v2 model
+- **Provider Selection**: Automatic based on target language (see `language_provider.json`)
+- **Configuration**: See `elevenlabs_languages.json` for TTS language mapping
+
 ## 📋 Prerequisites
 
 - Python 3.8 or higher

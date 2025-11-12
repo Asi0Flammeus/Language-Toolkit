@@ -35,7 +35,7 @@ import logging
 import re
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Set
 
 import requests
 
@@ -98,9 +98,35 @@ class TextToSpeechCore:
         self.progress_callback = progress_callback or (lambda x: None)
         self.voices = []
         self.voice_mapping = {}  # Will be populated from API
+        self.supported_languages = set()  # ElevenLabs supported language codes
+        
+        # Load ElevenLabs language configuration
+        self._load_language_config()
         
         # Load available voices from API
         self._load_voices_from_api()
+    
+    def _load_language_config(self):
+        """Load ElevenLabs language support configuration."""
+        try:
+            config_path = Path(__file__).parent.parent / "elevenlabs_languages.json"
+            
+            if not config_path.exists():
+                logger.warning(f"ElevenLabs language config not found at {config_path}, all languages will be allowed")
+                return
+            
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+            
+            # Extract supported language codes
+            for lang in config.get("supported_languages", []):
+                if lang.get("supported", False):
+                    self.supported_languages.add(lang["code"])
+            
+            logger.info(f"Loaded ElevenLabs language config: {len(self.supported_languages)} supported languages")
+            
+        except Exception as e:
+            logger.warning(f"Failed to load ElevenLabs language config: {e}, all languages will be allowed")
     
     def _load_voices_from_api(self):
         """Load available voices from ElevenLabs API."""
@@ -400,6 +426,82 @@ class TextToSpeechCore:
     def get_voices(self) -> List[Dict[str, Any]]:
         """Get list of available voices."""
         return self.voices
+    
+    def is_language_supported(self, language_code: str) -> bool:
+        """
+        Check if a language is supported by ElevenLabs multilingual v2 model.
+        
+        Args:
+            language_code: Language code to check (e.g., 'en', 'fr', 'zh-Hans')
+        
+        Returns:
+            True if language is supported, False otherwise
+        """
+        # If no config loaded, allow all languages
+        if not self.supported_languages:
+            return True
+        
+        # Check exact match
+        if language_code in self.supported_languages:
+            return True
+        
+        # Check case-insensitive match
+        lang_lower = language_code.lower()
+        for supported in self.supported_languages:
+            if supported.lower() == lang_lower:
+                return True
+        
+        return False
+    
+    def get_supported_languages(self) -> Set[str]:
+        """
+        Get set of language codes supported by ElevenLabs multilingual v2.
+        
+        Returns:
+            Set of supported language codes
+        """
+        return self.supported_languages.copy()
+    
+    def filter_languages_from_provider_config(self, language_provider_path: Optional[Path] = None) -> List[Dict[str, Any]]:
+        """
+        Filter languages from language_provider.json to only include ElevenLabs-supported ones.
+        
+        Args:
+            language_provider_path: Path to language_provider.json (defaults to project root)
+        
+        Returns:
+            List of language dictionaries that are supported by ElevenLabs
+        """
+        try:
+            if not language_provider_path:
+                language_provider_path = Path(__file__).parent.parent / "language_provider.json"
+            
+            if not language_provider_path.exists():
+                logger.warning(f"Language provider config not found at {language_provider_path}")
+                return []
+            
+            with open(language_provider_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+            
+            all_languages = config.get("languages", [])
+            supported_languages = []
+            
+            for lang in all_languages:
+                code = lang.get("code")
+                if code and self.is_language_supported(code):
+                    supported_languages.append({
+                        "code": code,
+                        "name": lang.get("name"),
+                        "translator": lang.get("translator"),
+                        "elevenlabs_supported": True
+                    })
+            
+            logger.info(f"Filtered to {len(supported_languages)} ElevenLabs-supported languages from {len(all_languages)} total")
+            return supported_languages
+            
+        except Exception as e:
+            logger.error(f"Failed to filter languages: {e}")
+            return []
     
     def find_voice_by_name(self, voice_name: str) -> Optional[str]:
         """Find voice ID by voice name."""

@@ -1,0 +1,176 @@
+{
+  "model": "eleven_multilingual_v2",
+  "description": "ElevenLabs Multilingual V2 model language support mapping",
+  "supported_languages": [
+    {
+      "code": "en",
+      "name": "English",
+      "elevenlabs_variants": ["USA", "UK", "Australia", "Canada"],
+      "supported": true
+    },
+    {
+      "code": "ja",
+      "name": "Japanese",
+      "supported": true
+    },
+    {
+      "code": "zh-Hans",
+      "name": "Chinese Simplified",
+      "supported": true
+    },
+    {
+      "code": "zh-Hant",
+      "name": "Chinese Traditional",
+      "supported": true
+    },
+    {
+      "code": "de",
+      "name": "German",
+      "supported": true
+    },
+    {
+      "code": "hi",
+      "name": "Hindi",
+      "supported": true
+    },
+    {
+      "code": "fr",
+      "name": "French",
+      "elevenlabs_variants": ["France", "Canada"],
+      "supported": true
+    },
+    {
+      "code": "ko",
+      "name": "Korean",
+      "supported": true
+    },
+    {
+      "code": "pt",
+      "name": "Portuguese",
+      "elevenlabs_variants": ["Brazil", "Portugal"],
+      "supported": true
+    },
+    {
+      "code": "it",
+      "name": "Italian",
+      "supported": true
+    },
+    {
+      "code": "es",
+      "name": "Spanish",
+      "elevenlabs_variants": ["Spain", "Mexico"],
+      "supported": true
+    },
+    {
+      "code": "id",
+      "name": "Indonesian",
+      "supported": true
+    },
+    {
+      "code": "nl",
+      "name": "Dutch",
+      "supported": true
+    },
+    {
+      "code": "tr",
+      "name": "Turkish",
+      "supported": true
+    },
+    {
+      "code": "pl",
+      "name": "Polish",
+      "supported": true
+    },
+    {
+      "code": "sv",
+      "name": "Swedish",
+      "supported": true
+    },
+    {
+      "code": "ro",
+      "name": "Romanian",
+      "supported": true
+    },
+    {
+      "code": "cs",
+      "name": "Czech",
+      "supported": true
+    },
+    {
+      "code": "fi",
+      "name": "Finnish",
+      "supported": true
+    },
+    {
+      "code": "ru",
+      "name": "Russian",
+      "supported": true
+    },
+    {
+      "code": "et",
+      "name": "Estonian",
+      "supported": false,
+      "note": "Not supported by ElevenLabs multilingual v2"
+    },
+    {
+      "code": "fa",
+      "name": "Farsi",
+      "supported": false,
+      "note": "Not supported by ElevenLabs multilingual v2"
+    },
+    {
+      "code": "nb-NO",
+      "name": "Norwegian",
+      "supported": false,
+      "note": "Not supported by ElevenLabs multilingual v2"
+    },
+    {
+      "code": "rn",
+      "name": "Rundi",
+      "supported": false,
+      "note": "Not supported by ElevenLabs multilingual v2"
+    },
+    {
+      "code": "si",
+      "name": "Sinhala",
+      "supported": false,
+      "note": "Not supported by ElevenLabs multilingual v2"
+    },
+    {
+      "code": "sr-Latn",
+      "name": "Serbian",
+      "supported": false,
+      "note": "Not supported by ElevenLabs multilingual v2"
+    },
+    {
+      "code": "sw",
+      "name": "Swahili",
+      "supported": false,
+      "note": "Not supported by ElevenLabs multilingual v2"
+    },
+    {
+      "code": "th",
+      "name": "Thai",
+      "supported": false,
+      "note": "Not supported by ElevenLabs multilingual v2"
+    },
+    {
+      "code": "vi",
+      "name": "Vietnamese",
+      "supported": false,
+      "note": "Not supported by ElevenLabs multilingual v2"
+    }
+  ],
+  "notes": {
+    "Bulgarian": "Supported by ElevenLabs but not in language_provider.json",
+    "Arabic": "Supported by ElevenLabs but not in language_provider.json",
+    "Greek": "Supported by ElevenLabs but not in language_provider.json",
+    "Croatian": "Supported by ElevenLabs but not in language_provider.json",
+    "Malay": "Supported by ElevenLabs but not in language_provider.json",
+    "Slovak": "Supported by ElevenLabs but not in language_provider.json",
+    "Danish": "Supported by ElevenLabs but not in language_provider.json",
+    "Tamil": "Supported by ElevenLabs but not in language_provider.json",
+    "Ukrainian": "Supported by ElevenLabs but not in language_provider.json",
+    "Filipino": "Supported by ElevenLabs but not in language_provider.json"
+  }
+}
