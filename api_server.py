@@ -324,6 +324,8 @@ class TaskStatus(BaseModel):
     task_id: str
     status: str = Field(..., description="Task status: pending, running, completed, failed")
     progress: Optional[str] = None
+    progress_current: Optional[int] = Field(None, description="Current progress count (e.g., files processed)")
+    progress_total: Optional[int] = Field(None, description="Total progress count (e.g., total files)")
     error: Optional[str] = None
     result_files: Optional[List[str]] = None
     manifest: Optional[Dict] = None
@@ -1731,6 +1733,8 @@ async def get_task_status(task_id: str, token: str = Depends(verify_token)):
         task_id=task_id,
         status=task["status"],
         progress=task.get("progress"),
+        progress_current=task.get("progress_current"),
+        progress_total=task.get("progress_total"),
         error=task.get("error"),
         result_files=task.get("result_files"),
         manifest=task.get("manifest"),
@@ -2221,8 +2225,13 @@ def run_course_translation_s3_sync(task_id: str, course_id: str, source_lang: st
 
         source_prefix = f"contribute/{course_id}/{source_lang}/"
 
-        def progress(msg: str):
+        def progress(msg: str, current: int = None, total: int = None):
+            """Update progress with message and optional counters"""
             active_tasks[task_id]["messages"].append(msg)
+            active_tasks[task_id]["progress"] = msg
+            if current is not None and total is not None:
+                active_tasks[task_id]["progress_current"] = current
+                active_tasks[task_id]["progress_total"] = total
             logger.info(f"Task {task_id}: {msg}")
         
         # Convertisseur PPTX ➜ PNG (ConvertAPI)
@@ -2234,7 +2243,14 @@ def run_course_translation_s3_sync(task_id: str, course_id: str, source_lang: st
         if not keys:
             raise RuntimeError(f"No .pptx or .txt files found under {source_prefix}")
 
-        progress(f"Found {len(keys)} files to process")
+        # Calculate total operations for progress tracking
+        # Each chapter with PPTX: translate + split + convert PNGs + translate TXTs
+        # Rough estimate: count txt files × target_langs as base unit
+        txt_files_count = sum(1 for k in keys if k.lower().endswith('.txt'))
+        total_operations = txt_files_count * len(target_langs)
+        current_operation = 0
+
+        progress(f"Found {len(keys)} files to process", 0, total_operations)
 
         # Prepare translators
         pptx_translator = PPTXTranslationCore(deepl_key, progress)
@@ -2340,6 +2356,7 @@ def run_course_translation_s3_sync(task_id: str, course_id: str, source_lang: st
 
             for target_lang in target_langs:
                 # Translate full pptx once per target language per chapter
+                progress(f"Translating PPTX for chapter {part_id}/{chapter_id} to {target_lang}", current_operation, total_operations)
                 translated_full = output_dir / f"translated_{target_lang}_{part_id}_{chapter_id}.pptx"
                 success = pptx_translator.translate_pptx(pptx_path, translated_full, source_lang, deepl_target(target_lang))
                 if not success:
@@ -2377,6 +2394,9 @@ def run_course_translation_s3_sync(task_id: str, course_id: str, source_lang: st
             # Process TXT files now (they are common to all langs)
             for (stem, slide_id, txt_local) in txt_entries:
                 for target_lang in target_langs:
+                    current_operation += 1
+                    progress(f"Translating text {stem} to {target_lang} ({current_operation}/{total_operations})", current_operation, total_operations)
+
                     target_rel_key = f"{part_id}/{chapter_id}/{slide_id}/text/{stem}.txt"
                     root_prefix = output_prefix.rstrip('/') + '/' if output_prefix else 'contribute/'
                     target_key = f"{root_prefix}{course_id}/{target_lang}/{target_rel_key}"
@@ -2433,6 +2453,7 @@ def run_course_translation_s3_sync(task_id: str, course_id: str, source_lang: st
                         insert_manifest([course_id, target_lang, part_id, chapter_id, slide_id, 'text'], f"{stem_txt}.txt")
 
         # Save manifest locally and upload
+        progress(f"Finalizing translation and uploading manifest", total_operations, total_operations)
         manifest_path = output_dir / "manifest.json"
         with open(manifest_path, "w", encoding="utf-8") as f:
             json.dump(manifest, f, ensure_ascii=False, indent=2)
@@ -2443,6 +2464,9 @@ def run_course_translation_s3_sync(task_id: str, course_id: str, source_lang: st
         active_tasks[task_id]["status"] = "completed"
         active_tasks[task_id]["result_files"] = [manifest_key]
         active_tasks[task_id]["manifest"] = manifest
+        active_tasks[task_id]["progress"] = "Translation completed successfully"
+        active_tasks[task_id]["progress_current"] = total_operations
+        active_tasks[task_id]["progress_total"] = total_operations
 
     except Exception as e:
         logger.error(f"Course task {task_id} failed: {e}")
@@ -2836,6 +2860,9 @@ async def translate_course_s3(
         "messages": [],
         "manifest": None,
         "source_lang": effective_source_lang,
+        "progress": None,
+        "progress_current": 0,
+        "progress_total": 0,
     }
 
     # Run in executor to avoid blocking the event loop
