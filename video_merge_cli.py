@@ -316,15 +316,22 @@ def run_video_merge(
         else:
             # Recursive processing
             logger.log(f"Scanning recursively: {input_path}")
+            dirs_found = 0
+            dirs_with_files = 0
             for dirpath, dirnames, filenames in os.walk(input_path):
                 curr_dir = Path(dirpath)
+                dirs_found += 1
 
                 # Check if directory has MP3 and PNG files
-                has_mp3 = any(f.lower().endswith('.mp3') for f in filenames)
-                has_png = any(f.lower().endswith(('.png', '.webp')) for f in filenames)
+                mp3_count = sum(1 for f in filenames if f.lower().endswith('.mp3'))
+                png_count = sum(1 for f in filenames if f.lower().endswith(('.png', '.webp')))
 
-                if not has_mp3 or not has_png:
+                if mp3_count == 0 or png_count == 0:
+                    if mp3_count > 0 or png_count > 0:
+                        logger.log(f"  Skipping {curr_dir.name}: {mp3_count} MP3, {png_count} PNG")
                     continue
+
+                dirs_with_files += 1
 
                 logger.log("")
                 logger.log("-" * 40)
@@ -346,6 +353,9 @@ def run_video_merge(
                     processed_folders.append(str(curr_dir))
                 else:
                     skipped_folders.append(str(curr_dir))
+
+            logger.log("")
+            logger.log(f"Scan complete: {dirs_found} dirs scanned, {dirs_with_files} with MP3+PNG files")
 
         # Summary
         logger.log("")
