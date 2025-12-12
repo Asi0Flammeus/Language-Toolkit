@@ -514,7 +514,7 @@ class VideoMergerCore:
                         '-loop', '1',
                         '-i', str(image_file),
                         '-i', str(actual_audio_file),
-                        '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2',
+                        '-vf', 'scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2',
                         '-af', 'loudnorm=I=-14:TP=-1:LRA=11',  # Apply loudness normalization to maintain consistency
                         '-c:v', 'libx264',
                         '-tune', 'stillimage',
@@ -546,7 +546,7 @@ class VideoMergerCore:
                             '-i', str(image_file),
                             '-f', 'lavfi', 
                             '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
-                            '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2',
+                            '-vf', 'scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2',
                             '-c:v', 'libx264',
                             '-t', '2',  # 2 seconds stall
                             '-c:a', 'aac',
@@ -571,7 +571,7 @@ class VideoMergerCore:
                             '-i', str(image_file),
                             '-f', 'lavfi', 
                             '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
-                            '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2',
+                            '-vf', 'scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2',
                             '-c:v', 'libx264',
                             '-t', str(silence_duration),
                             '-c:a', 'aac',
@@ -625,12 +625,20 @@ class VideoMergerCore:
                     intro_ts = temp_path / "intro.ts"
                     main_ts = temp_path / "main.ts"
                     
-                    # Convert intro to TS
-                    self.progress_callback("Converting intro to TS format...")
+                    # Scale and convert intro to TS format (ensure 1920x1080 resolution)
+                    self.progress_callback("Scaling and converting intro to TS format (1920x1080)...")
                     intro_to_ts_cmd = [
                         'ffmpeg', '-y',
                         '-i', str(intro_video),
-                        '-c', 'copy',
+                        '-vf', 'scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2',
+                        '-c:v', 'libx264',
+                        '-preset', 'fast',
+                        '-crf', '23',
+                        '-c:a', 'aac',
+                        '-b:a', '192k',
+                        '-ar', '44100',
+                        '-ac', '2',
+                        '-pix_fmt', 'yuv420p',
                         '-bsf:v', 'h264_mp4toannexb',
                         '-f', 'mpegts',
                         str(intro_ts)
@@ -639,13 +647,16 @@ class VideoMergerCore:
                     result = subprocess.run(intro_to_ts_cmd, capture_output=True, text=True)
                     if result.returncode != 0:
                         logger.error(f"Failed to convert intro to TS: {result.stderr}")
-                        # Fall back to concat filter method
-                        self.progress_callback("TS conversion failed, using concat filter instead...")
+                        # Fall back to concat filter method with scaling
+                        self.progress_callback("TS conversion failed, using concat filter with scaling instead...")
                         final_concat_cmd = [
                             'ffmpeg', '-y',
                             '-i', str(intro_video),
                             '-i', str(temp_main),
-                            '-filter_complex', '[0:v:0][0:a:0][1:v:0][1:a:0]concat=n=2:v=1:a=1[outv][outa]',
+                            '-filter_complex', 
+                            '[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1[v0];'
+                            '[1:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1[v1];'
+                            '[v0][0:a][v1][1:a]concat=n=2:v=1:a=1[outv][outa]',
                             '-map', '[outv]',
                             '-map', '[outa]',
                             '-c:v', 'libx264',
@@ -653,6 +664,8 @@ class VideoMergerCore:
                             '-crf', '23',
                             '-c:a', 'aac',
                             '-b:a', '192k',
+                            '-ar', '44100',
+                            '-pix_fmt', 'yuv420p',
                             '-movflags', '+faststart',
                             str(output_path)
                         ]

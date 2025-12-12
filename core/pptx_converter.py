@@ -283,6 +283,69 @@ class PPTXConverterCore:
             logger.error(f"Failed to crop PNG {png_path}: {e}")
             return False
 
+    def _resize_png_to_1080p(self, png_path: Path) -> bool:
+        """
+        Resize a PNG image to 1920x1080 (Full HD) resolution.
+        
+        Maintains aspect ratio and adds black bars (letterboxing/pillarboxing) if needed.
+        This matches the video output resolution for consistency.
+        
+        Args:
+            png_path: Path to PNG file to resize
+            
+        Returns:
+            True if resizing was successful
+        """
+        try:
+            TARGET_WIDTH = 1920
+            TARGET_HEIGHT = 1080
+            
+            img = Image.open(png_path)
+            original_width, original_height = img.size
+            
+            # Check if already at target resolution
+            if original_width == TARGET_WIDTH and original_height == TARGET_HEIGHT:
+                self.progress_callback(f"Image already at 1920x1080: {png_path.name}")
+                return True
+            
+            # Calculate scaling to fit within 1920x1080 while preserving aspect ratio
+            width_ratio = TARGET_WIDTH / original_width
+            height_ratio = TARGET_HEIGHT / original_height
+            scale_ratio = min(width_ratio, height_ratio)
+            
+            new_width = int(original_width * scale_ratio)
+            new_height = int(original_height * scale_ratio)
+            
+            # Resize the image with high-quality resampling
+            if img.mode != 'RGBA':
+                img = img.convert('RGBA')
+            
+            resized = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            
+            # Create a new 1920x1080 canvas with black background
+            canvas = Image.new('RGBA', (TARGET_WIDTH, TARGET_HEIGHT), (0, 0, 0, 255))
+            
+            # Calculate position to center the image
+            x_offset = (TARGET_WIDTH - new_width) // 2
+            y_offset = (TARGET_HEIGHT - new_height) // 2
+            
+            # Paste the resized image onto the canvas
+            canvas.paste(resized, (x_offset, y_offset))
+            
+            # Convert to RGB (no alpha) for final PNG to reduce file size
+            final_img = canvas.convert('RGB')
+            
+            # Save the resized image
+            final_img.save(png_path, 'PNG', optimize=True)
+            
+            self.progress_callback(f"Resized {png_path.name} from {original_width}x{original_height} to 1920x1080")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to resize PNG {png_path}: {e}")
+            self.progress_callback(f"Warning: Failed to resize {png_path.name}: {e}")
+            return False
+
     def convert_pptx_to_png(self, input_path: Path, output_dir: Path, group_elements: bool = False) -> List[str]:
         """
         Convert PPTX file to PNG images (one per slide).
@@ -365,6 +428,13 @@ class PPTXConverterCore:
 
             if not png_files:
                 raise RuntimeError("No PNG files were generated successfully")
+
+            # Resize all PNG files to 1920x1080 (Full HD) for video consistency
+            self.progress_callback("Resizing PNG files to 1920x1080...")
+            for png_file in png_files:
+                png_path = Path(png_file)
+                if png_path.exists():
+                    self._resize_png_to_1080p(png_path)
 
             # Apply element grouping/cropping if requested
             if group_elements:

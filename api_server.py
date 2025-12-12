@@ -3518,7 +3518,7 @@ def create_video_with_ffmpeg_videomergetool(file_pairs: List[Tuple[str, Path, Pa
                 '-loop', '1',
                 '-i', str(png_file),
                 '-i', str(mp3_file),
-                '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2',
+                '-vf', 'scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2',
                 '-c:v', 'libx264',
                 '-tune', 'stillimage',
                 '-c:a', 'aac',
@@ -3548,7 +3548,7 @@ def create_video_with_ffmpeg_videomergetool(file_pairs: List[Tuple[str, Path, Pa
                     '-i', str(png_file),
                     '-f', 'lavfi',
                     '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
-                    '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2',
+                    '-vf', 'scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2',
                     '-c:v', 'libx264',
                     '-t', '0.2',  # 0.2 seconds silence
                     '-c:a', 'aac',
