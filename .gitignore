@@ -7,3 +7,5 @@ venv/
 outputs/
 data/*
 tests/
+*.log
+nohup.out
