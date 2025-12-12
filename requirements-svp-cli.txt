@@ -1,0 +1,33 @@
+# =====================================
+# SVP CLI Minimal Requirements
+# Compatible with Python 3.8+
+# =====================================
+
+# Core dependencies for SVP CLI
+python-dotenv==1.1.1
+
+# AI & Translation Services (required for SVP)
+deepl==1.21.1
+elevenlabs==1.56.0
+convertapi==2.0.0
+
+# Document Processing (PPTX handling)
+python-pptx==1.0.2
+pillow>=10.0.0
+
+# Audio Processing (TTS and video)
+pydub==0.25.1
+
+# HTTP Clients (for API calls)
+requests>=2.31.0
+
+# Utilities
+tqdm>=4.65.0
+
+# Optional: If you need the full toolkit features
+# Uncomment these if needed:
+# openai>=1.0.0
+# PyMuPDF>=1.23.0
+# librosa>=0.10.0
+# soundfile>=0.12.0
+# pyloudnorm>=0.1.0

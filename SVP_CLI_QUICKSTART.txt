@@ -1,0 +1,95 @@
+================================================================================
+                    SVP CLI - QUICK REFERENCE
+================================================================================
+
+BASIC SYNTAX:
+  ./svp_cli.py -i INPUT -o OUTPUT -s SOURCE -t TARGET [TARGET ...]
+
+COMMON COMMANDS:
+
+  # List available languages
+  ./svp_cli.py --list-languages
+
+  # Translate to French
+  ./svp_cli.py -i ./input -o ./output -s en -t fr
+
+  # Translate to multiple languages
+  ./svp_cli.py -i ./input -o ./output -s en -t fr es de it
+
+  # Translate to ALL languages
+  ./svp_cli.py -i ./input -o ./output -s en -t all
+
+  # Translation only (no video)
+  ./svp_cli.py -i ./input -o ./output -s en -t fr --mode translate
+
+  # Export only (PNG, TTS, video)
+  ./svp_cli.py -i ./input -o ./output -s en -t fr --mode export
+
+  # With intro video
+  ./svp_cli.py -i ./input -o ./output -s en -t fr --intro
+
+  # Background with progress log
+  ./svp_cli.py -i ./input -o ./output -s en -t all --log progress.log &
+  tail -f progress.log
+
+PROCESSING MODES:
+  --mode full       Complete workflow (translation + video generation) [default]
+  --mode translate  Translation only (PPTX + TXT)
+  --mode export     Export only (PNG + TTS + video merge)
+
+OPTIONS:
+  --intro          Add Plan B intro to videos
+  --no-skip        Reprocess existing files
+  --log FILE       Write progress to file (for tail -f)
+  -v, --verbose    Enable debug logging
+
+POPULAR LANGUAGE CODES:
+  en     English          fr     French           es     Spanish
+  de     German           it     Italian          pt     Portuguese
+  ru     Russian          zh-hans Chinese (S)     zh-hant Chinese (T)
+  ja     Japanese         ko     Korean           hi     Hindi
+
+  (Use --list-languages for complete list)
+
+EXAMPLES:
+
+1. Quick test with one language:
+   ./svp_cli.py -i ./test -o ./test-out -s en -t fr
+
+2. Production run with all languages:
+   ./svp_cli.py -i ./courses -o ./translated -s en -t all --log full.log &
+   tail -f full.log
+
+3. Two-phase workflow:
+   # Phase 1: Translate only
+   ./svp_cli.py -i ./courses -o ./translated -s en -t fr es --mode translate
+
+   # Review translations, then Phase 2: Generate videos
+   ./svp_cli.py -i ./courses -o ./translated -s en -t fr es --mode export --intro
+
+4. Regenerate videos only:
+   ./svp_cli.py -i ./translated -o ./videos -s en -t fr --mode export --no-skip
+
+TROUBLESHOOTING:
+  - Missing API keys? Configure api_keys.json or set env variables
+  - Permission denied? Run: chmod +x svp_cli.py
+  - Invalid language? Check with: ./svp_cli.py --list-languages
+  - Need help? Run: ./svp_cli.py --help
+
+BACKGROUND PROCESSING:
+  # Start
+  nohup ./svp_cli.py -i ./in -o ./out -s en -t all --log progress.log &
+  echo $! > process.pid
+
+  # Monitor
+  tail -f progress.log
+
+  # Check status
+  ps aux | grep $(cat process.pid)
+
+  # Stop
+  kill $(cat process.pid)
+
+================================================================================
+For detailed documentation, see: SVP_CLI_USAGE.md
+================================================================================

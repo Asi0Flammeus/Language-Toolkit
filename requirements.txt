@@ -4,10 +4,10 @@
 
 # Core API Framework
 fastapi==0.115.12
-uvicorn[standard]==0.34.3
+uvicorn[standard]
 gunicorn==23.0.0
 python-multipart==0.0.20
-starlette==0.46.2
+starlette==0.44.0
 
 # Data Validation & Serialization
 pydantic==2.11.1
